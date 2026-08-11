@@ -1,0 +1,211 @@
+\documentclass{memoir}
+
+\title{Project of Distributed Systems: Blockchain Inventory System}
+
+\authors{Cancian Matteo, Del Pio Luogo Marco, Di Marco Massimiliano}
+
+\date{Version 0.1, \today}
+
+\begin{document}
+
+
+%\begin{titlingpage}
+\maketitle
+\begin{abstract}
+...
+\end{abstract}
+%\end{titlingpage}
+
+\chapter{Introduction}\label{ch:intro}
+
+Il presente progetto si propone di sviluppare un database dedicato alla registrazione di asset di alto valore, assumendo come caso d'uso principale il 
+sistema catastale immobiliare. Tali domini operativi sono intrinsecamente caratterizzati da una bassa frequenza e da un volume ridotto di transazioni; 
+tuttavia, richiedono garanzie assolute sull'integrità e sull'ordine cronologico delle operazioni registrate. Per soddisfare questi rigorosi requisiti, 
+l'architettura proposta integra la tecnologia blockchain applicandola direttamente ai log delle transazioni, offrendo così una soluzione ottimale per 
+garantire l'immutabilità della sequenza storica, l'affidabilità del dato e la piena accountability.
+
+-----------------------------------------------------------------------------------------------------------------------
+
+I Vantaggi: Perché portare il Catasto su Blockchain?
+
+La blockchain risponde, in teoria, a molti dei problemi storici legati alla registrazione delle proprietà immobiliari:
+
+Immutabilità e lotta alle frodi: In un database tradizionale, un amministratore di sistema corrotto (o un hacker) potrebbe alterare l'intestazione di una 
+proprietà. Sulla blockchain, una volta che un blocco di dati è consolidato, modificarlo retroattivamente è matematicamente e computazionalmente quasi impossibile.
+
+Tracciabilità storica perfetta: La natura stessa della blockchain crea una catena ininterrotta ("chain of title"). 
+Questo permetterebbe di risalire a tutti i precedenti proprietari di un immobile in modo istantaneo e inequivocabile, eliminando dispute legali.
+
+Automazione tramite Smart Contract: Si potrebbero creare "contratti intelligenti" che eseguono automaticamente il passaggio di proprietà solo quando i 
+fondi vengono effettivamente trasferiti. Questo ridurrebbe drasticamente i tempi di attesa e, potenzialmente, i costi di intermediazione (come quelli notarili).
+
+Resilienza dell'infrastruttura: Essendo un registro distribuito su migliaia di nodi (computer) indipendenti, 
+la blockchain non ha un "singolo punto di fallimento". È immune alla distruzione fisica dei server centrali a causa di incendi, guerre o disastri naturali.
+
+Il Bagno di Realtà: Le Sfide e i Falsi Miti
+
+Sebbene sulla carta sembri la soluzione perfetta, la realtà tecnica e giuridica ci impone di fare alcune correzioni di rotta:
+
+Il problema del "Garbage In, Garbage Out": La blockchain garantisce che i dati non vengano manomessi dopo essere stati inseriti, 
+ma non può verificare se il dato iniziale sia vero. Se un truffatore riesce a registrare falsamente una proprietà a suo nome, 
+la blockchain renderà semplicemente quella menzogna "immutabile". La necessità di un'autorità umana (un notaio, un funzionario statale) 
+che verifichi l'identità e i diritti nel mondo fisico rimane fondamentale.
+
+Privacy vs. Trasparenza: Una blockchain pubblica è aperta a tutti. Registrare nomi, cognomi e indirizzi di proprietà di tutti i 
+cittadini su un registro pubblico e incancellabile entra in conflitto diretto con le normative sulla privacy (come il GDPR europeo) e con il diritto all'oblio.
+
+Efficienza tecnica: I database relazionali tradizionali (quelli usati oggi) sono infinitamente più veloci, economici e facili da 
+aggiornare rispetto a un'infrastruttura blockchain.
+
+Gestione degli errori: Se in un catasto tradizionale viene fatto un errore di battitura, un funzionario autorizzato lo corregge. 
+Sulla blockchain, modificare un errore richiede procedure molto più complesse, poiché l'architettura è progettata proprio per impedire le modifiche.
+
+-----------------------------------------------------------------------------------------------------------------------
+
+Se i nodi che validano le transazioni sono entità note, autorizzate e pre-approvate (in questo caso, i server dello Stato, delle Regioni o dei Ministeri), 
+non siamo più nel mondo delle blockchain "pubbliche" come Bitcoin, e non si usano algoritmi dispendiosi come la Proof of Work.
+
+Questa architettura si definisce Blockchain Permissioned (o di Consorzio). L'algoritmo di consenso più utilizzato in questi casi si chiama Proof of 
+Authority (PoA).
+
+Come funziona la Proof of Authority: Non c'è "mining" e non si mettono in gioco criptovalute. Il diritto di generare un nuovo blocco di transazioni 
+è affidato a nodi che hanno dimostrato la loro identità (i server di enti governativi o notarili). Il consenso viene raggiunto perché i nodi si fidano 
+dell'identità crittografica degli altri nodi. Se un nodo "impazzisce" o viene hackerato, gli altri server della rete lo escludono. Altri algoritmi 
+simili usati in questi contesti sono basati su protocolli BFT (Byzantine Fault Tolerance).
+
+
+------------------------------------------------------------------------------------------------------------------------
+
+L'applicazione è un sistema di gestione della motorizzazione civile basato su blockchain, che consente di registrare, tracciare e gestire le proprietà delle automobili in modo sicuro e trasparente. 
+Tale sistema è utilizzato da agenzie della motorizzazione e autorità governative per garantire la sicurezza delle transazioni di proprietà delle automobili e la tracciabilità delle proprietà.
+
+-------
+1. Come si chiama la "Proof" tra server statali?
+
+Se i nodi che validano le transazioni sono entità note, autorizzate e pre-approvate (in questo caso, i server dello Stato, delle Regioni o dei Ministeri), 
+non siamo più nel mondo delle blockchain "pubbliche" come Bitcoin, e non si usano algoritmi dispendiosi come la Proof of Work.
+
+Questa architettura si definisce Blockchain Permissioned (o di Consorzio). L'algoritmo di consenso più utilizzato in questi casi si chiama Proof of 
+Authority (PoA).
+
+Come funziona la Proof of Authority: Non c'è "mining" e non si mettono in gioco criptovalute. Il diritto di generare un nuovo blocco di transazioni è 
+affidato a nodi che hanno dimostrato la loro identità (i server di enti governativi o notarili). Il consenso viene raggiunto perché i nodi si fidano 
+dell'identità crittografica degli altri nodi. Se un nodo "impazzisce" o viene hackerato, gli altri server della rete lo escludono. Altri algoritmi 
+3simili usati in questi contesti sono basati su protocolli BFT (Byzantine Fault Tolerance).
+
+
+
+________________________________________________________
+
+Esatto! Hai rimesso sul tavolo le due opzioni esatte. Questo è il vero e proprio "bivio architetturale" del vostro progetto.
+
+Entrambe le strade sono validissime per superare un esame di Sistemi Distribuiti. La scelta dipende principalmente da due fattori: **quanto tempo avete prima della consegna** e **su cosa si è concentrato di più il professore a lezione**.
+
+Ecco un ultimo consiglio pratico per aiutarvi a decidere:
+
+### Perché scegliere l'Opzione A (Raft a 3 nodi + Client)
+
+* **Vantaggio:** È molto più facile da programmare e da "debuggare". 
+I messaggi che i server si scambiano sono semplici (richiesta di voto, conferma, heartbeat).
+* **Ideale se:** Avete poco tempo, volete un sistema solido che funzioni bene durante la demo, 
+e il corso si è concentrato molto sul concetto di tolleranza ai crash (CFT) e sull'elezione del leader.
+
+### Perché scegliere l'Opzione B (PBFT a 4 nodi + Client)
+
+* **Vantaggio:** È il "Santo Graal" delle blockchain private. Mostra che avete capito a fondo i 
+problemi di sicurezza (nodi hackerati/maliziosi) e non solo i guasti hardware.
+* **Svantaggio (attenzione):** L'algoritmo PBFT richiede lo scambio di molti più messaggi tra i 
+server per approvare una singola transazione (fasi di *Pre-Prepare*, *Prepare*, *Commit*). 
+Scriverlo in Python vi richiederà più attenzione per gestire tutti questi scambi senza far bloccare il programma.
+* **Ideale se:** Volete puntare al massimo dei voti, avete tempo per sviluppare e il professore 
+è un fanatico dei comportamenti Bizantini.
+
+
+
+In this chapter you describe the main problem, and an idea of the solution.
+It is not necessary to be very detailed or formal, but it is important to explain which are the main aims and issues from the point of view of Distributed Systems:
+\begin{itemize}
+\item A description of the application.
+\item The overall structure of the implementation: how resources are deployed, which are the players, the r\^oles.
+\item The distributed system features (and the transparencies) and algorithms you intend to implement.
+\item Your plan for testing the system.
+\item A schedule for how you plan to carry our your design and implementation
+\end{itemize}
+
+
+
+\chapter{Analysis}\label{ch:analysis}
+
+In this chapter, we describe in detail functional and non-functional requirements of a solution for the problem.
+
+\section{Functional requirements}
+Which functions must be offered to users / other programs?  Which are the input data and the output data? Which is the expected effect? 
+
+\section{Non functional requirements}
+Everything about mode and transparencies: availability, mobility, security, fault tolerance, etc.
+
+Are there execution time bounds? Minimum data rates?
+
+If requested, specific platforms/languages/middlewares requirements for the implementation can be decided here. (E.g.: if the project is on a SOA, we may request that functions are offered via SOAP or RESTful services). 
+
+
+
+\chapter{Project}
+
+This chapter is devoted to the description of the general architectures, and specific algorithms.
+
+\section{Logical architecture}
+Describe the components of your systems: modules/objects/components/services.
+For each component, describe the functionalities it implements, and by who is used.
+
+\section{Protocols and algorithms}
+Communication between components.  UML sequence diagrams go here.
+
+Also, put here a detailed description of distributed algorithms used to solve specific problems of the project.
+
+\section{Physical architecture and deployment}
+Which nodes and platforms involved, and where each component is deployed.
+
+\section{Development plan}
+Since it is difficult to predict just how hard implementing a new system will be, you should formulate as a set of ``tiers,'' where the basic tier is something you’re sure you can complete, and the additional tiers add more features, at both the application and the system level.
+
+\chapter{Implementation}
+
+Details about the implementation: every choice about platforms, languages, software/hardware, middlewares, which has not been decided in the requirements.
+
+
+Important choices about implementation should be described here; e.g., peculiar data structures.
+
+
+\chapter{Validation}
+
+Check if requirements from Chapter~\ref{ch:analysis} have been fulfilled.
+Quantitative tests (simulations) and screenshots of the interfaces are put here.
+
+
+\chapter{Conclusions}
+
+What has been done with respect to what has been promised in Chapters~\ref{ch:intro} and \ref{ch:analysis}, and what is left out.
+
+\appendix
+
+\chapter{Appendix}
+
+In the Appendix you can put code snippets, snapshots, installation instructions, etc.
+
+
+\chapter*{Evaluation}
+Your system will be judged mainly on how it operates as a distributed system. The primary evaluation will be according to whether your system has the following attributes:
+\begin{itemize}
+\item  It should be an interesting distributed system, making use of some of the algorithms we have covered in class for distributed synchronization, replication, fault tolerance and recovery, security, etc.
+\item The software should be well designed and well implemented, in terms of the overall architecture and the detailed realization.
+\item You should devise and apply systematic testing procedures, at both the unit and systems levels.
+\item The system should operate reliably and with good performance, even in the face of failures.
+\end{itemize}
+Important, but secondary considerations include:
+\begin{itemize}
+\item Time taken to do the project (the sooner the better, but do not miss details in order to end sooner)
+\item  How nice is the application's appearance: does it have a nice interface or a compelling visual display?
+\end{itemize}
+
+\end{document}
