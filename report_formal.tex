@@ -48,9 +48,9 @@ Organizations must track every item movement seamlessly, covering two fundamenta
     \item \textbf{Outbound Operations:} Documenting the dispatch, sale, or permanent removal of assets from the inventory.
 \end{itemize}
 
-Centralized inventory databases suffer from fundamental vulnerabilities. 
+Centralized inventory databases suffer from fundamental vulnerabilities and limitations. 
 A compromised system administrator or external attacker can alter historical logs, modify asset quantities retroactively, or erase operational records without detection. 
-Furthermore, centralized infrastructures represent Single Points of Failure (SPoF) vulnerable to hardware faults, network partitioning, and physical disasters.
+Furthermore, centralized infrastructures represent Single Points of Failure (SPF) vulnerable to hardware faults, network partitioning, and physical disasters.
 
 Conversely, human operators and automated IoT scanners inevitably commit operational errors (misscanning barcodes, miskeying quantities, or logging duplicate items). 
 In an immutable ledger, simply deleting or modifying past entries is forbidden by design. 
@@ -65,7 +65,9 @@ The system relies on two primary node types:
     \item \textbf{Client/Operator Nodes:} User-facing client terminals (web frontends or handheld devices) utilized by warehouse staff. Client nodes do not participate in block generation; instead, they sign transactions locally and submit them to validator nodes via API endpoints.
 \end{enumerate}
 
-By storing item movements as cryptographically signed transaction logs linked through cryptographic hashes ($H(B_n) = \text{Hash}(B_{n-1} \parallel T_n \parallel \text{nonce})$), the system ensures strict sequential ordering, immutability, and full accountability.
+By storing item movements as cryptographically signed transaction logs linked through cryptographic hashes ($H(B_n) = \text{Hash}(B_{n-1} \parallel T_n \parallel \text{nonce})$), the system ensures strict sequential ordering, immutability, and full accountability. 
+
+In this project, we omitted the implementation of \textbf{strong authentication methods} for the 'operator'. We therefore assume that transactions are authentically signed by the operators, making it impossible for a Byzantine node to alter them. 
 
 \section{Trade-off Analysis of Blockchain Technology}
 Applying blockchain technology to enterprise asset management introduces distinct advantages alongside technical trade-offs, summarized below.
@@ -75,25 +77,23 @@ Applying blockchain technology to enterprise asset management introduces distinc
     \item \textbf{Immutability and Anti-Tampering:} Once a block is committed through consensus, retroactively modifying a transaction requires re-executing consensus across the majority of validator nodes, making fraud virtually impossible.
     \item \textbf{Complete Historical Traceability:} The chain provides an unbroken audit log for every asset from initial registration (inbound) to final disposal (outbound), eliminating operational disputes between warehouse sites.
     \item \textbf{High Infrastructure Resilience:} Replicating the state across independent regional validator nodes guarantees high availability; the failure or destruction of a single site does not cause data loss or system downtime.
-    \item \textbf{Smart Contract Automation:} Programmable business logic can automatically enforce rules, such as preventing an outbound transfer for an item marked as reserved or out-of-stock.
 \end{itemize}
 
 \subsection{Disadvantages and Mitigations}
 \begin{itemize}
-    \item \textbf{The ``Garbage In, Garbage Out'' Problem:} Blockchain guarantees that stored data cannot be altered, but cannot verify whether physical items match their digital claims. This is mitigated through multi-operator authorization and cryptographic signature verification at the client layer.
     \item \textbf{Error Remediation Complexity:} Because records cannot be erased, mistake correction requires introducing new explicit compensating transactions (e.g., explicit reversals) linked to the original erroneous transaction ID.
-    \item \textbf{Latency vs. Throughput:} Distributed consensus introduces message overhead compared to traditional relational databases. Using Proof of Authority (PoA) minimizes this performance cost.
+    \item \textbf{Latency vs Throughput:} Distributed consensus introduces message overhead compared to traditional relational databases. Using Proof of Authority (PoA) minimizes this performance cost.
 \end{itemize}
 
 \section{Consensus Mechanism: Proof of Authority (PoA)}
-Because all validator nodes represent known corporate entities, consensus is achieved via \textbf{Proof of Authority (PoA)} or leader-based **Byzantine Fault Tolerance (BFT)** algorithms (e.g., PBFT or Raft with cryptographic signatures). 
+Because all validator nodes represent known corporate entities, consensus is achieved via \textbf{Proof of Authority (PoA)} and leader-based Byzantine Fault Tolerance (BFT) algorithms (e.g., PBFT). 
 
-In PoA, round-robin or stake-weighted validator rotas designate a block proposer for each time slot. The proposer aggregates pending transactions, signs the proposed block, and broadcasts it to peer validators. Peer nodes verify the proposer's digital signature and the validity of all contained transactions before appending the block to their local copy of the ledger.
+In PoA, round-robin or stake-weighted validator rotations designate a block proposer for each time interval. The proposer aggregates pending transactions, signs the proposed block, and broadcasts it to peer validators. Peer nodes verify the proposer's digital signature and the validity of all contained transactions before appending the block to their local copy of the ledger.
 
 \section{Testing Plan and Project Schedule}
 \subsection{Testing Strategy}
 \begin{itemize}
-    \item \textbf{Unit Testing:} Verification of cryptographic key generation, digital signature signing/verification, and local ledger block serialization.
+    \item \textbf{Unit Testing:} Verification of modules and functions independently through specific test suites. 
     \item \textbf{Integration Testing:} Testing client-to-validator communication, transaction propagation, and state machine transitions.
     \item \textbf{System \& Fault Tolerance Testing:} Simulating node crashes, network packet loss, message reordering, and malicious/Byzantine transaction proposals.
 \end{itemize}
@@ -102,8 +102,8 @@ In PoA, round-robin or stake-weighted validator rotas designate a block proposer
 The project design and implementation follow a four-stage timeline:
 \begin{enumerate}
     \item \textbf{Phase 1 (Requirements \& Architecture):} Defining system specifications, network models, and UML sequence diagrams.
-    \item \textbf{Phase 2 (Core Development):} Implementing the permissioned blockchain node, cryptographic library, and basic consensus mechanism.
-    \item \textbf{Phase 3 (Client Layer \& Error Remediation):} Developing client APIs, operator UI, and compensating transaction handling.
+    \item \textbf{Phase 2 (Core Development):} Implementing the permissioned blockchain node, networking functionlities, and basic consensus mechanism.
+    \item \textbf{Phase 3 (Client Layer):} Developing client APIs, operator UI, and compensating transaction handling.
     \item \textbf{Phase 4 (Validation \& Evaluation):} Conducting benchmark simulations, network failure injection, and report finalization.
 \end{enumerate}
 
