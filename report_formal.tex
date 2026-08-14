@@ -241,8 +241,8 @@ The step-by-step operational flow for inventory updates is illustrated in Figure
 
 \subsection{Error Remediation Protocol}
 When an operational mistake occurs (e.g., logging 100 items inbound instead of 10), the operator initiates a compensating flow:
-1. Operator creates a remediation transaction $T_{\text{remedy}}$ targeting original transaction $T_{\text{err}}$.
-2. $T_{\text{remedy}}$ contains the differential delta ($\Delta \text{Qty} = -90$) and explicit references $\text{RefID} = \text{Hash}(T_{\text{err}})$.
+1. The operator press the 'correction' button inside the frontend dashboard and then selects the transaction $T_{\text{remedy}}$ to be corrected. 
+2. The 
 3. Supervisors sign $T_{\text{remedy}}$. Once committed via consensus, state updates correctly without erasing $T_{\text{err}}$, maintaining historical auditability.
 
 \section{Physical Architecture and Deployment}
