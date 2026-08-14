@@ -211,19 +211,25 @@ The system is structured into two logical layers (Figure~\ref{fig:uml_architectu
 
 \subsection{Transaction Lifecycle and Block Proposal}
 The step-by-step operational flow for inventory updates is illustrated in Figure~\ref{fig:uml_sequence}:
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.75\textwidth]{add_block_3-3.png}
+    \caption{Logical Architecture and Component Interactions of the Distributed Ledger System.}
+    \label{fig:uml_architecture}
+\end{figure}
 
 \begin{figure}[htbp]
     \centering
     \begin{subfigure}[b]{0.48\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{UML_attivita.png}
+        \includegraphics[width=\textwidth]{add_block_2-3.png}
         \caption{Sequence Diagram: Transaction Submission \& Validation.}
         \label{fig:uml_seq1}
     \end{subfigure}
     \hfill
     \begin{subfigure}[b]{0.48\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{UML_attivita.png}
+        \includegraphics[width=\textwidth]{add_block_3-4.png}
         \caption{Sequence Diagram: Consensus Block Propagation.}
         \label{fig:uml_seq2}
     \end{subfigure}
