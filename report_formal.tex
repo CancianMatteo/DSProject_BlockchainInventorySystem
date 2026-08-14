@@ -247,9 +247,9 @@ The step-by-step operational flow for inventory updates is illustrated in Figure
 
 \subsection{Error Remediation Protocol}
 When an operational mistake occurs (e.g., logging 100 items inbound instead of 10), the operator initiates a compensating flow:
-1. The operator press the 'correction' button inside the frontend dashboard and then selects the transaction $T_{\text{remedy}}$ to be corrected. 
-2. The 
-3. Supervisors sign $T_{\text{remedy}}$. Once committed via consensus, state updates correctly without erasing $T_{\text{err}}$, maintaining historical auditability.
+1. Operator selects a 'correction' button inside the frontend dashboard and then he selects the transaction $T_{\text{err}}$ to be corrected.
+2. The software generates an automatic compensation transaction $T_{\text{remedy}}$ to cancel $T_{\text{err}}$ while the operator creates the new correct transaction $T_{\text{corrected}}$, which have to be approved by the Supervisor.
+3. Once Supervisors signs this transaction correction, the transactions are sent in broadcast to the validator nodes.
 
 \section{Physical Architecture and Deployment}
 The physical deployment model relies on containerized microservices (Docker) across distributed sites:
