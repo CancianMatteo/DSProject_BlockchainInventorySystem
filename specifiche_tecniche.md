@@ -13,7 +13,11 @@ Il modulo `InventoryNode.Router` analizzato funge da dispatcher, inoltrando le r
 Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requisiti del progetto (FR-1, FR-2, FR-3), quando un client (nodo operatore) invia una transazione al backend (tramite il `ClientListener` che si trova in ascolto sulla porta 5000 del host base), il payload JSON deve rispettare la seguente struttura:
 
 ```json per le transazioni
-{
+
+
+## API Python deve gestire i seguenti messaggi:
+
+-JSON di forma {
   "flag": "transaction",
   "from_node": "string" (client),
   "tx_type": "string",
@@ -22,10 +26,7 @@ Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requi
   "location": "string",
   "timestamp": "string",
   "tx_id": "string",
-}
-
-
-## API Python deve gestire i seguenti messaggi:
+} Le transazioni ricevute sono solo da mettere in una lista (o meglio ancora un set) di 'transazioni pendenti'. Queste poi vengono rimosse quando un blocco proposto e CONFERMATO viene scritto nella blockchain.
 
 - JSON di forma {flag: "setup_keys", from_node: Node.self(), pub_key: pub_key}: deve generare chiave pubblica e privata del nodo richiedente e salvarle per le future firme, ritornando a questo messaggio un JSON {"flag": "setup_keys", "pub_key": pub_key}. Inoltre deve essere presente un dizionario con le chiavi pubbliche degli altri peers (nodo_A: pubkey_a)
 
