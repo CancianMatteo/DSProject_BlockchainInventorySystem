@@ -44,7 +44,7 @@ defmodule InventoryNode.Router do
        # KEYS SETUP OPERATION
     {:setup_keys, pub_key} ->
       IO.puts("Setup delle chiavi pubbliche e private per la crittografia")
-      case send_to_python_service(%{flag: "setup_keys", pub_key: pub_key}, python_host, python_port) do
+      case send_to_python_service(%{flag: "setup_keys", from_node: Node.self(), pub_key: pub_key}, python_host, python_port) do
         {:ok, pub_key} ->
           broadcast_to_peers(peers, {:setup_keys_warning, Node.self(), pub_key})
 
@@ -55,13 +55,27 @@ defmodule InventoryNode.Router do
         # KEYS SETUP WARNING OPERATION
     {:setup_keys_warning, from_node, pub_key} ->
       IO.puts("Ricevuto avviso di setup chiavi da #{inspect(from_node)}")
-      case send_to_python_service(%{flag: "setup_keys_warning", from: from_node, pub_key: pub_key}, python_host, python_port) do
+      case send_to_python_service(%{flag: "setup_keys_warning", from_node: from_node, pub_key: pub_key}, python_host, python_port) do
         {:ok, pub_key} ->
           IO.puts("Chiave pubblica del nodo #{inspect(from_node)} registrata correttamente.")
 
         {:error, reason} ->
           IO.puts("Errore dal servizio Python: #{inspect(reason)}")
         end
+
+        # NEW BLOCK REQUEST OPERATION
+    %{"flag" => "new_block_req", "block_data" => block_data, "signature" => signature} ->
+      IO.puts("Ricevuta richiesta di nuovo blocco: #{inspect(block_data)}")
+      case send_to_python_service(%{flag: "new_block_req", block_data: block_data}, python_host, python_port) do
+        {:ok, response} ->
+          IO.puts("Risposta dal servizio Python: #{inspect(response)}")
+          response
+
+        {:error, reason} ->
+          IO.puts("Errore dal servizio Python: #{inspect(reason)}")
+        end
+
+    end
 
 
 

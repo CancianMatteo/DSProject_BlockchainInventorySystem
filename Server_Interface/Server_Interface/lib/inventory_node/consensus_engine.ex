@@ -40,6 +40,7 @@ defmodule InventoryNode.ConsensusEngine do
     total_nodes = map_size(peers) + 1
     majority = 3 # Su 4 nodi, la maggioranza qualificata BFT è 3
 
+
     state = %{
       node_id: node_id,
       peers: peers,
@@ -58,7 +59,7 @@ defmodule InventoryNode.ConsensusEngine do
     {:ok, reset_election_timer(state)}
   end
 
-  # --- Gestione dei Timer ---
+  # gestione dei messaggi asincroni (timeout, heartbeat, ecc.)
 
   @impl true
   def handle_info(:election_timeout, state) do

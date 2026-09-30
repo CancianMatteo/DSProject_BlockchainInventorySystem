@@ -1,63 +1,122 @@
 version: '3.8'
 
-services:
+# definizione delle reti isolate e di quella pubblica (imita i diversi nodi in diverse macchine)
+networks:
+  cluster_network:
+    driver: bridge
+  node_a_internal:
+    driver: bridge
+    internal: true
+  node_b_internal:
+    driver: bridge
+    internal: true
+  node_c_internal:
+    driver: bridge
+    internal: true
+  node_d_internal:
+    driver: bridge
+    internal: true
 
+services:
+  
+  # NODO A
+  python_validator_a:
+    build: 
+      context: ./python_service
+    networks:
+      node_a_internal:
+        aliases:
+          - python_validator # elixir lo chiamerà con questo nome
 
   node_a:
-    python_validator:
-      build: 
-        context: ./python_service # servizio python
-      ports:
-        - "5001:5001"
     build: .
     environment:
       - NODE_ID=node_a
-      # python_validator è il nome del servizio python_validator definito sopra
       - PYTHON_HOST=python_validator 
       - PYTHON_PORT=5001
       - MY_PORT=4001
       - PEERS=node_b:4002,node_c:4003,node_d:4004
     ports:
-      - "4001:4000"
-      - "5001:5000"
+      - "4001:4001"
     depends_on:
-      - python_validator
+      - python_validator_a
+    networks:
+      - node_a_internal
+      - cluster_network
+
+
+  # NODO B
+  python_validator_b:
+    build: 
+      context: ./python_service
+    networks:
+      node_b_internal:
+        aliases:
+          - python_validator
 
   node_b:
     build: .
     environment:
       - NODE_ID=node_b
       - PYTHON_HOST=python_validator
-      - PYTHON_PORT=5002
+      - PYTHON_PORT=5001 # Può rimanere 5001 perché la rete è isolata
       - MY_PORT=4002
       - PEERS=node_a:4001,node_c:4003,node_d:4004
     ports:
       - "4002:4002"
     depends_on:
-      - python_validator
+      - python_validator_b
+    networks:
+      - node_b_internal
+      - cluster_network
+
+
+  # NODO C
+  python_validator_c:
+    build: 
+      context: ./python_service
+    networks:
+      node_c_internal:
+        aliases:
+          - python_validator
 
   node_c:
     build: .
     environment:
       - NODE_ID=node_c
       - PYTHON_HOST=python_validator
-      - PYTHON_PORT=5003
+      - PYTHON_PORT=5001
       - MY_PORT=4003
       - PEERS=node_a:4001,node_b:4002,node_d:4004
     ports:
       - "4003:4003"
     depends_on:
-      - python_validator
-      
+      - python_validator_c
+    networks:
+      - node_c_internal
+      - cluster_network
+
+  # NODO D
+  python_validator_d:
+    build: 
+      context: ./python_service
+    networks:
+      node_d_internal:
+        aliases:
+          - python_validator
+
   node_d:
     build: .
     environment:
       - NODE_ID=node_d
       - PYTHON_HOST=python_validator
-      - PYTHON_PORT=5004
+      - PYTHON_PORT=5001
       - MY_PORT=4004
       - PEERS=node_a:4001,node_b:4002,node_c:4003
     ports:
       - "4004:4004"
     depends_on:
-      - python_validator
+      - python_validator_d
+    networks:
+      - node_d_internal
+      - cluster_network

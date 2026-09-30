@@ -23,3 +23,11 @@ Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requi
   "timestamp": "string",
   "tx_id": "string",
 }
+
+
+## API Python deve gestire i seguenti messaggi:
+
+- JSON di forma {flag: "setup_keys", from_node: Node.self(), pub_key: pub_key}: deve generare chiave pubblica e privata del nodo richiedente e salvarle per le future firme, ritornando a questo messaggio un JSON {"flag": "setup_keys", "pub_key": pub_key}. Inoltre deve essere presente un dizionario con le chiavi pubbliche degli altri peers (nodo_A: pubkey_a)
+
+- JSON di forma {flag: "setup_keys_warning", from_node: from_node, pub_key: pub_key}: ricevi la chiave pubblica di un'altro nodo appena acceso e si deve registrare nel dizionario di chiavi pubbliche degli altri nodi. Deve restituire un JSON {"flag" => "setup_keys_warning", "status" => "success"}.
+
