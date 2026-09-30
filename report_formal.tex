@@ -249,16 +249,16 @@ The step-by-step operational flow for inventory updates is illustrated in Figure
 When an operational mistake occurs (e.g., logging 100 items inbound instead of 10), the operator initiates a compensating flow:
 1. Operator selects a 'correction' button inside the frontend dashboard and then he selects the transaction $T_{\text{err}}$ to be corrected.
 2. The software generates an automatic compensation transaction $T_{\text{remedy}}$ to cancel $T_{\text{err}}$ while the operator creates the new correct transaction $T_{\text{corrected}}$, which have to be approved by the Supervisor.
-3. Once Supervisors signs this transaction correction, the transactions are sent in broadcast to the validator nodes.
+3. Once Supervisors signs this transaction correction, the transactions are sent in broadcast to the validator nodes (there is a chance not to create a new transaction).
 
 \section{Physical Architecture and Deployment}
 The physical deployment model relies on containerized microservices (Docker) across distributed sites:
 \begin{itemize}
-    \item Each regional warehouse hosts a local validator container connected to regional hardware security modules (HSM) for key management.
+    \item Each regional warehouse hosts a local validator container divided in two components: The blockchain module and the networking module. 
     \item Client devices connect via secure REST/gRPC endpoints exposed by local API gateways.
     \item Peer-to-peer (P2P) communication among validator containers uses encrypted TCP channels over enterprise VPN tunnels.
 \end{itemize}
- while the operator screatcreates a 
+
 \section{Development Plan}
 To manage implementation risk, development is divided into three incremental tiers:
 
