@@ -15,12 +15,11 @@ Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requi
 ```json per le transazioni
 {
   "flag": "transaction",
-  "from_node": "string",
+  "from_node": "string" (client),
   "tx_type": "string",
   "item_id": "string",
-  "quantity": 0,
+  "quantity": "int",
   "location": "string",
   "timestamp": "string",
   "tx_id": "string",
-  "signature": "string" 
 }
