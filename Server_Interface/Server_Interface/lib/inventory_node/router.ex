@@ -40,7 +40,6 @@ defmodule InventoryNode.Router do
         end
 
 
-
        # KEYS SETUP OPERATION
     {:setup_keys, pub_key} ->
       IO.puts("Setup delle chiavi pubbliche e private per la crittografia")
@@ -108,7 +107,7 @@ defmodule InventoryNode.Router do
             {:ok, %{"flag" => "setup_keys", "pub_key" => pub_key}} ->
               {:ok, pub_key}
 
-            {:ok, %{"flag" => "setup_keys_warning", "from" => from_node, "pub_key" => pub_key}} ->
+            {:ok, %{"flag" => "setup_keys_warning", "status" => "success"}} ->
               {:ok, "setup_keys_warning"}
 
             {:ok,%{ _ => data}} ->
@@ -142,4 +141,3 @@ end
 
   end
 end
- end

@@ -2,210 +2,249 @@ defmodule InventoryNode.ConsensusEngine do
   use GenServer
   require Logger
 
-  @min_election_timeout 1500
-  @max_election_timeout 3000
-  @heartbeat_interval 500
-
+  @round_timeout 5000 # Tempo massimo per chiudere un blocco prima di cambiare Proposer
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, :ok, opts ++ [name: __MODULE__])
   end
 
-  def handle_vote_request(term, candidate_id, signature) do
-    GenServer.cast(__MODULE__, {:request_vote, term, candidate_id, signature})
-  end
-
-  def handle_vote_granted(term) do
-    GenServer.cast(__MODULE__, {:vote_granted, term})
-  end
-
-  def handle_append_entries(term, leader_id) do
-    GenServer.cast(__MODULE__, {:append_entries, term, leader_id})
-  end
-
-
   @impl true
   def init(:ok) do
-    # Lettura delle variabili d'ambiente da Docker Compose
     node_id = System.get_env("NODE_ID")
     python_host = System.get_env("PYTHON_HOST") |> String.to_charlist()
     python_port = System.get_env("PYTHON_PORT") |> String.to_integer()
-
-    # e parsing della stringa PEERS
     peers = parse_peers(System.get_env("PEERS"))
 
+    # In PBFT tutti i nodi (incluso se stesso) formano la lista dei validatori
+    validator_nodes = Enum.sort([node_id | Map.keys(peers)])
+    total_nodes = length(validator_nodes)
 
-    # Per tolleranza BFT standard a 1 nodo guasto/bizantino (f=1), servono 3f+1 nodi (4).
-    # La maggioranza richiesta per vincere è 3.
-    total_nodes = map_size(peers) + 1
-    majority = 3 # Su 4 nodi, la maggioranza qualificata BFT è 3
-
+    # N = 3f + 1 -> Quorum = 2f + 1
+    # 4 nodi -> f=1 -> Quorum = 3
+    f = div(total_nodes - 1, 3)
+    quorum = 2 * f + 1
 
     state = %{
       node_id: node_id,
       peers: peers,
+      validators: validator_nodes,
       python_host: python_host,
       python_port: python_port,
-      majority: majority,
-      role: :follower,
-      current_term: 0,
-      voted_for: nil,
-      votes_received: 0,
-      leader_id: nil,
-      timer_ref: nil
+      quorum: quorum,
+
+      # Stato BFT
+      current_height: 1,      # Numero del blocco
+      current_round: 0,       # Tentativo corrente per questa altezza
+      timer_ref: nil,
+
+      # Accumulatori per le fasi BFT
+      prepare_votes: MapSet.new(),
+      commit_votes: MapSet.new(),
+
+      # Dati del blocco in lavorazione
+      pending_block: nil
     }
 
-    Logger.info("Nodo #{node_id} avviato. BFT Majority: #{majority}. Peers: #{inspect(Map.keys(peers))}")
-    {:ok, reset_election_timer(state)}
+    Logger.info("BFT-PoA Avviato. Nodo: #{node_id}. Quorum: #{quorum}/#{total_nodes}")
+    {:ok, start_round(state)}
   end
 
-  # gestione dei messaggi asincroni (timeout, heartbeat, ecc.)
 
-  @impl true
-  def handle_info(:election_timeout, state) do
-    new_term = state.current_term + 1
-    Logger.info("Timeout! #{state.node_id} diventa Candidate per il Term #{new_term}")
+  # GESTIONE DEL ROUND E PROPOSER (ROUND-ROBIN)
 
-    new_state = %{
-      state |
-      role: :candidate,
-      current_term: new_term,
-      voted_for: state.node_id,
-      votes_received: 1,
-      leader_id: nil
+
+  defp start_round(state) do
+    if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
+    timer_ref = Process.send_after(self(), :round_timeout, @round_timeout)
+
+    # Il proposer è deterministico: (Altezza + Round) mod numero totale di nodi
+    proposer_index = rem(state.current_height + state.current_round, length(state.validators))
+    current_proposer = Enum.at(state.validators, proposer_index)
+
+    # Pulisce i voti del round precedente
+    new_state = %{state |
+      timer_ref: timer_ref,
+      prepare_votes: MapSet.new(),
+      commit_votes: MapSet.new(),
+      pending_block: nil
     }
 
-    # Firma e invia la richiesta di voto a tutti gli altri container
-    signature = sign_payload({:request_vote, new_term, state.node_id}, state.node_id)
-    broadcast_to_peers(state.peers, {:request_vote, new_term, state.node_id, signature})
-
-    {:noreply, reset_election_timer(new_state)}
-  end
-
-  @impl true
-  def handle_info(:send_heartbeat, %{role: :leader} = state) do
-    # Invia heartbeat in broadcast
-    broadcast_to_peers(state.peers, {:append_entries, state.current_term, state.node_id})
-    timer_ref = Process.send_after(self(), :send_heartbeat, @heartbeat_interval)
-    {:noreply, %{state | timer_ref: timer_ref}}
-  end
-  def handle_info(:send_heartbeat, state), do: {:noreply, state}
-
-  # --- Logica di Consenso e Gestione Bizantina (Task Asincroni) ---
-
-  @impl true
-  def handle_cast({:request_vote, candidate_term, candidate_id, signature}, state) do
-    engine_pid = self()
-    payload = {:request_vote, candidate_term, candidate_id}
-
-    # Task asincrono: chiede a Python nel container 'python_validator' di verificare
-    Task.start(fn ->
-      is_valid = verify_with_python(payload, signature, candidate_id, state.python_host, state.python_port)
-      send(engine_pid, {:signature_verified, candidate_id, candidate_term, is_valid})
-    end)
-
-    {:noreply, state}
-  end
-
-  @impl true
-  def handle_info({:signature_verified, candidate_id, candidate_term, true}, state) do
-    cond do
-      candidate_term < state.current_term ->
-        {:noreply, state}
-
-      candidate_term > state.current_term ->
-        Logger.info("Firma di #{candidate_id} valida. Voto concesso.")
-        send_to_peer(state.peers, candidate_id, {:vote_granted, candidate_term})
-        new_state = %{state | role: :follower, current_term: candidate_term, voted_for: candidate_id}
-        {:noreply, reset_election_timer(new_state)}
-
-      state.voted_for in [nil, candidate_id] ->
-        send_to_peer(state.peers, candidate_id, {:vote_granted, candidate_term})
-        {:noreply, reset_election_timer(%{state | voted_for: candidate_id})}
-
-      true -> {:noreply, state}
-    end
-  end
-
-  @impl true
-  def handle_info({:signature_verified, candidate_id, _term, false}, state) do
-    Logger.warning("Firma NON VALIDA o errore validatore da #{candidate_id}. Rifiuto.")
-    {:noreply, state}
-  end
-
-  @impl true
-  def handle_cast({:vote_granted, term}, %{role: :candidate, current_term: current_term} = state)
-      when term == current_term do
-
-    votes = state.votes_received + 1
-
-    if votes >= state.majority do
-      Logger.info("MAGGIORANZA (#{votes}/#{state.majority}) RAGGIUNTA! #{state.node_id} è il Leader (Term #{current_term})")
-
-      if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
-      timer_ref = Process.send_after(self(), :send_heartbeat, 0)
-
-      {:noreply, %{state | role: :leader, votes_received: votes, timer_ref: timer_ref, leader_id: state.node_id}}
+    if current_proposer == state.node_id do
+      Logger.info("[Altezza #{state.current_height}] Sono il Proposer (Round #{state.current_round})")
+      propose_block(new_state)
     else
-      {:noreply, %{state | votes_received: votes}}
+      Logger.info("[Altezza #{state.current_height}] Proposer atteso: #{current_proposer}")
+      new_state
     end
   end
-  def handle_cast({:vote_granted, _}, state), do: {:noreply, state}
 
   @impl true
-  def handle_cast({:append_entries, leader_term, leader_id}, state) do
-    if leader_term >= state.current_term do
-      new_state = %{
-        state |
-        role: :follower,
-        current_term: leader_term,
-        leader_id: leader_id
-      }
-      {:noreply, reset_election_timer(new_state)}
+  def handle_info(:round_timeout, state) do
+    Logger.warning("Timeout blocco #{state.current_height}. Avvio Round Change a #{state.current_round + 1}")
+    # Se il proposer è collassato o bizantino, si incrementa il round e si passa al prossimo
+    new_state = %{state | current_round: state.current_round + 1}
+    {:noreply, start_round(new_state)}
+  end
+
+  # FASE 1: PRE-PREPARE (proposta del leader)
+
+
+  defp propose_block(state) do
+   msg = %{flag: "prepare_block", node_id: Node.self()}
+    block_data = send_to_python_service(msg, state.python_host, state.python_port)
+
+    payload = %{
+      "flag" => "pre_prepare",
+      "height" => state.current_height,
+      "round" => state.current_round,
+      "proposer_id" => state.node_id,
+      "block" => block_data
+    }
+
+    signature = send_to_python_service(payload, state.python_host, state.python_port)
+    msg = {:pre_prepare, state.current_height, state.current_round, state.node_id, block_data, signature}
+
+    # Invia a TUTTI
+    broadcast_to_all(state.peers, state.node_id, msg)
+    state
+  end
+
+  @impl true
+  def handle_cast({:pre_prepare, height, round, proposer_id, block_data, signature}, state) do
+    engine_pid = self()
+    payload = %{"flag" => "pre_prepare", "height" => height, "round" => round, "proposer_id" => proposer_id, "block" => block_data, "signature" => signature, "proposer_id" => proposer_id}
+
+    # Verifica la firma asincronamente
+    Task.start(fn ->
+      is_valid = send_to_python_service(payload, state.python_host, state.python_port)
+      send(engine_pid, {:verified_pre_prepare, height, round, proposer_id, block_data, is_valid})
+    end)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:verified_pre_prepare, height, round, proposer_id, block_data, true}, state) do
+    # Verifica che la proposta sia per l'altezza corrente e dal vero Proposer deterministico
+    expected_proposer = Enum.at(state.validators, rem(height + round, length(state.validators)))
+
+    if height == state.current_height and round == state.current_round and proposer_id == expected_proposer do
+      Logger.info("Pre-Prepare valido da #{proposer_id}. Avvio fase PREPARE.")
+
+      # invia broadcast a TUTTI che si è d'accordo
+      payload = %{"flag" => "prepare", "height" => height, "round" => round, "validator_id" => state.node_id}
+      signature = send_to_python_service(payload, state.python_host, state.python_port)
+
+      msg = {:prepare, height, round, state.node_id, signature}
+      broadcast_to_all(state.peers, state.node_id, msg)
+
+      {:noreply, %{state | pending_block: block_data}}
     else
       {:noreply, state}
     end
   end
+  def handle_info({:verified_pre_prepare, _, _, proposer_id, _, false}, state), do: ignore_bad_sig(proposer_id, state)
 
 
-  # --- Funzioni di supporto ---
+  # FASE 2: PREPARE (verifica broadcast)
 
-  defp reset_election_timer(state) do
-    if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
-    timeout = Enum.random(@min_election_timeout..@max_election_timeout)
-    timer_ref = Process.send_after(self(), :election_timeout, timeout)
-    %{state | timer_ref: timer_ref}
-  end
+  @impl true
+  def handle_cast({:prepare, height, round, validator_id, signature}, state) do
+    engine_pid = self()
+    payload = %{"flag" => "prepare", "height" => height, "round" => round, "validator_id" => validator_id, "signature" => signature}
 
-  defp parse_peers(peers_env) do
-
-    (peers_env || "")
-    |> String.split(",", trim: true)
-    |> Enum.into(%{}, fn peer ->
-      [host, port] = String.split(String.trim(peer), ":")
-      {host, {String.to_charlist(host), String.to_integer(port)}}
+    Task.start(fn ->
+      is_valid = send_to_python_service(payload, state.python_host, state.python_port)
+      send(engine_pid, {:verified_prepare, height, round, validator_id, is_valid})
     end)
+    {:noreply, state}
   end
 
-  defp broadcast_to_peers(peers, message) do
+  @impl true
+  def handle_info({:verified_prepare, height, round, validator_id, true}, state) do
+    if height == state.current_height and round == state.current_round do
+      new_votes = MapSet.put(state.prepare_votes, validator_id)
+
+      # se raggiungiamo il Quorum (2f + 1) e non avevamo ancora committato
+      if MapSet.size(new_votes) == state.quorum do
+        Logger.info("Quorum PREPARE raggiunto! Avvio fase COMMIT.")
+
+        # COMMIT
+        payload = %{"flag" => "commit", "height" => height, "round" => round, "validator_id" => state.node_id}
+        signature = send_to_python_service(payload, state.python_host, state.python_port)
+
+        msg = {:commit, height, round, state.node_id, signature}
+        broadcast_to_all(state.peers, state.node_id, msg)
+      end
+
+      {:noreply, %{state | prepare_votes: new_votes}}
+    else
+      {:noreply, state} # messaggio obsoleto
+    end
+  end
+  def handle_info({:verified_prepare, _, _, validator_id, false}, state), do: ignore_bad_sig(validator_id, state)
+
+
+  # FASE 3: COMMIT (finalizzazione)
+
+  @impl true
+  def handle_cast({:commit, height, round, validator_id, signature}, state) do
+    engine_pid = self()
+    payload = %{"flag" => "commit", "height" => height, "round" => round, "validator_id" => validator_id, "signature" => signature}
+
+    Task.start(fn ->
+      is_valid = send_to_python_service(payload, state.python_host, state.python_port)
+      send(engine_pid, {:verified_commit, height, round, validator_id, is_valid})
+    end)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:verified_commit, height, round, validator_id, true}, state) do
+    if height == state.current_height and round == state.current_round do
+      new_votes = MapSet.put(state.commit_votes, validator_id)
+
+      if MapSet.size(new_votes) == state.quorum do
+        Logger.info("BLOCCO #{height} COMMITTATO!")
+
+        # scrittura del blocco sul servizio Python (simulazione di scrittura su DB)
+        payload = %{"flag" => "write_block", "height" => height, "block_data" => state.pending_block}
+        case send_to_python_service(payload, state.python_host, state.python_port) do
+          true -> Logger.info("Blocco #{height} scritto correttamente sul servizio Python.")
+          false -> Logger.error("Errore nella scrittura del blocco #{height} sul servizio Python.")
+        end
+
+        # si passa al prossimo blocco, resettando il round a 0
+        new_state = %{state |
+          current_height: state.current_height + 1,
+          current_round: 0
+        }
+        {:noreply, start_round(new_state)}
+      else
+        {:noreply, %{state | commit_votes: new_votes}}
+      end
+    else
+      {:noreply, state}
+    end
+  end
+  def handle_info({:verified_commit, _, _, validator_id, false}, state), do: ignore_bad_sig(validator_id, state)
+
+  # --- Funzioni di Supporto Rete e Python ---
+
+  defp ignore_bad_sig(node_id, state) do
+    Logger.error("Firma invalida da #{node_id}. Possibile nodo Bizantino!")
+    {:noreply, state}
+  end
+
+  defp broadcast_to_all(peers, self_id, message) do
+    GenServer.cast(__MODULE__, message)
+
     data = :erlang.term_to_binary(message)
     Enum.each(peers, fn {_peer_id, {host, port}} ->
       send_tcp(host, port, data)
     end)
   end
 
-  defp send_to_peer(peers, peer_id, message) do
-    # Dato l'ID del nodo (es "node_b"), recupera l'host e la porta e invia
-    case Map.fetch(peers, peer_id) do
-      {:ok, {host, port}} ->
-        send_tcp(host, port, :erlang.term_to_binary(message))
-      :error ->
-        Logger.error("Peer #{peer_id} sconosciuto.")
-    end
-  end
-
   defp send_tcp(host, port, binary_data) do
-    # Connessione usa-e-getta per l'invio del messaggio a un altro nodo Elixir
     case :gen_tcp.connect(host, port, [:binary, active: false], 1000) do
       {:ok, socket} ->
         :gen_tcp.send(socket, binary_data)
@@ -214,26 +253,36 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
-  defp verify_with_python(payload, signature, node_id, py_host, py_port) do
-    request = %{action: "verify", payload: payload, signature: signature, node_id: node_id}
+  defp parse_peers(peers_env) do
+    (peers_env || "")
+    |> String.split(",", trim: true)
+    |> Enum.into(%{}, fn peer ->
+      [host, port] = String.split(String.trim(peer), ":")
+      {host, {String.to_charlist(host), String.to_integer(port)}}
+    end)
+  end
 
+
+
+  defp send_to_python_service(payload, py_host, py_port) do
     case :gen_tcp.connect(py_host, py_port, [:binary, active: false], 2000) do
       {:ok, socket} ->
-        :gen_tcp.send(socket, Jason.encode!(request))
+        :gen_tcp.send(socket, Jason.encode!(payload))
         result = case :gen_tcp.recv(socket, 0, 2000) do
-          {:ok, "valid"} -> true
-          _ -> false
+          {:ok, response_json} ->
+            case Jason.decode(response_json) do
+              {:ok, %{"status" => "valid"}} -> true
+
+
+              _ -> false
+            end
+          {:error, reason} ->
+            Logger.error("Errore di lettura dal servizio Python: #{inspect(reason)}")
+            false
         end
         :gen_tcp.close(socket)
         result
-      {:error, _} ->
-        false
+      _ -> false
     end
-  end
-
-  defp sign_payload(_payload, _node_id) do
-    # Qui implementerai la logica (o la chiamata a un tool crittografico)
-    # per firmare il payload con la chiave privata del nodo.
-    "firma_fittizia_base64"
   end
 end

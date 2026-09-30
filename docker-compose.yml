@@ -33,7 +33,7 @@ services:
     environment:
       - NODE_ID=node_a
       - PYTHON_HOST=python_validator 
-      - PYTHON_PORT=5001
+      - PYTHON_PORT=5000
       - MY_PORT=4001
       - PEERS=node_b:4002,node_c:4003,node_d:4004
     ports:
@@ -59,7 +59,7 @@ services:
     environment:
       - NODE_ID=node_b
       - PYTHON_HOST=python_validator
-      - PYTHON_PORT=5001 # Può rimanere 5001 perché la rete è isolata
+      - PYTHON_PORT=5000 
       - MY_PORT=4002
       - PEERS=node_a:4001,node_c:4003,node_d:4004
     ports:
@@ -85,7 +85,7 @@ services:
     environment:
       - NODE_ID=node_c
       - PYTHON_HOST=python_validator
-      - PYTHON_PORT=5001
+      - PYTHON_PORT=5000
       - MY_PORT=4003
       - PEERS=node_a:4001,node_b:4002,node_d:4004
     ports:
@@ -110,7 +110,7 @@ services:
     environment:
       - NODE_ID=node_d
       - PYTHON_HOST=python_validator
-      - PYTHON_PORT=5001
+      - PYTHON_PORT=5000
       - MY_PORT=4004
       - PEERS=node_a:4001,node_b:4002,node_c:4003
     ports:
