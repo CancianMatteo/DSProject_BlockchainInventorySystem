@@ -1,0 +1,22 @@
+services:
+  bis-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bis_api_server
+    # Keep private key permissions strict (e.g. 600) by matching host file owner.
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    # Development: Uvicorn can serve TLS directly when TLS_REQUIRED=true.
+    ports:
+      - "${API_PUBLIC_PORT:-2900}:${API_PORT:-8000}"
+    volumes:
+      # Mappa il volume per la persistenza del DB SQLite
+      - bis_data:/data
+      # Certificati TLS (bind mount read-only)
+      - ./certs:/certs:ro
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  bis_data:

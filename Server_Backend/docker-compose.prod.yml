@@ -1,0 +1,19 @@
+services:
+  bis-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # In production, TLS is terminated by host NGINX.
+    env_file:
+      - .env
+    environment:
+      - TLS_REQUIRED=false
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    ports:
+      - "127.0.0.1:2900:8000"
+    volumes:
+      - bis_data:/data
+
+volumes:
+  bis_data:

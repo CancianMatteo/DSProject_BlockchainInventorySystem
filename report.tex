@@ -21,16 +21,17 @@
 
 \title{\textbf{Distributed Systems Project: \\ Permissioned Blockchain Inventory System}}
 \author{\textbf{Cancian Matteo} \quad \and \quad \textbf{Del Pio Luogo Marco}}
-\date{Version 0.3 --- \today}
+\date{Version 0.4 --- \today}
 
 \begin{document}
 
 \maketitle
 
 \begin{abstract}
-Managing inventory across multi-site enterprise environments presents critical challenges regarding data integrity, traceability, and accountability. 
+Managing inventory across multi-site enterprise environments presents critical challenges regarding data integrity and accountability. 
 Traditional centralized hierarchical systems introduce single points of failure and rely on trusted administrators who can unilaterally modify audit logs. 
-This project proposes a fault-tolerant, permissioned blockchain-based distributed system for enterprise asset tracking. The system guarantees immutable, append-only logging of inbound and outbound inventory transactions while supporting human error remediation through cryptographic compensating operations. Operating over a network with fair-loss links under a synchronous model, the platform leverages Proof of Authority (PoA) and Byzantine Fault Tolerance (BFT) consensus to achieve deterministic block finality, high throughput, and resilience against adversarial node behavior.
+This project proposes a fault-tolerant, permissioned blockchain-based distributed system for enterprise/government asset tracking. The system guarantees immutable, append-only logging of inbound and outbound inventory transactions while supporting human error remediation through cryptographic compensating operations. 
+Operating over a network with fair-loss links under a synchronous model, the platform leverages Proof of Authority (PoA) and Byzantine Fault Tolerance (BFT) consensus to achieve deterministic block finality, high throughput, and resilience against adversarial node behavior.
 \end{abstract}
 
 \clearpage
@@ -164,10 +165,10 @@ In this chapter, we outline the functional and non-functional requirements for t
     The distributed ledger must deliver deterministic block finality (zero fork probability once a block is confirmed by a majority of validators), ensuring immediate consistency across all warehouse locations.
 
     \item[\textbf{NFR-4: Performance \& Throughput}]
-    The system must process a minimum of 10 transactions per second (TPS) with block creation intervals set below 5 minutes, ensuring operational responsiveness for warehouse operators.
+    The system must process a minimum of 10 transactions per second, with block creation intervals set below 1 minutes (for pending transactions), ensuring operational responsiveness for warehouse operators.
 
     \item[\textbf{NFR-5: Auditability \& Transparency}]
-    The full history of all operations must be verifiable by any validator node (and thus by operators?) without relying on a centralized central authority.
+    The full history of all operations must be verifiable by any validator node (and thus by operators) without relying on a centralized central authority.
 \end{description}
 
 % ==============================================================================
@@ -202,7 +203,7 @@ The system is structured into two logical layers (Figure~\ref{fig:uml_architectu
     \begin{itemize}
         \item \emph{Mempool Manager:} Holds pending, unconfirmed transactions.
         \item \emph{Consensus Engine:} Executes the Proof of Authority / BFT protocol.
-        \item \emph{State Machine Replication (SMR) Module:} Applies verified blocks to update local inventory state tables.
+        \item \emph{Cached State Updater:} Applies verified blocks to update local inventory state tables.
         \item \emph{Ledger Storage:} Append-only disk storage containing linked blocks and indexed databases for fast state queries.
     \end{itemize}
 \end{enumerate}
@@ -247,15 +248,25 @@ The step-by-step operational flow for inventory updates is illustrated in Figure
 
 \subsection{Error Remediation Protocol}
 When an operational mistake occurs (e.g., logging 100 items inbound instead of 10), the operator initiates a compensating flow:
-1. Operator selects a 'correction' button inside the frontend dashboard and then he selects the transaction $T_{\text{err}}$ to be corrected.
-2. The software generates an automatic compensation transaction $T_{\text{remedy}}$ to cancel $T_{\text{err}}$ while the operator creates the new correct transaction $T_{\text{corrected}}$, which have to be approved by the Supervisor.
-3. Once Supervisors signs this transaction correction, the transactions are sent in broadcast to the validator nodes (there is a chance not to create a new transaction).
+\begin{enumerate}
+    \item Operator selects a 'correction' button inside the frontend dashboard and then selects the transaction $T_{\text{err}}$ to be corrected.
+    \item The software generates an automatic compensation transaction $T_{\text{remedy}}$ to cancel $T_{\text{err}}$ while the operator creates the new correct transaction $T_{\text{corrected}}$.
+    \item Once the new transaction is complete, it is signed and sent to the validator node of the warehouse.
+\end{enumerate}
+
+\subsection{Node Recovery and Network Synchronization}
+When a server crashes and recovers, it must synchronize its mempool and blockchain state securely without relying on naive majority votes, which could be manipulated by a Byzantine node.
+\begin{itemize}
+    \item \textbf{Mempool Synchronization:} The recovering node requests pending transactions from any active peer. Because every transaction includes the unforgeable client signature ($\text{Sig}_{\text{Op}}$), the node independently verifies cryptographic validity without requiring network consensus or trust in the sender.
+    \item \textbf{Ledger Synchronization:} The node queries peers for missing blocks. It accepts historical blocks as canonical only if they contain the required $2f+1$ cryptographic signatures from distinct validators, decoupling the recovery process from the trust level of any single node (including the current leader).
+\end{itemize}
+
 
 \section{Physical Architecture and Deployment}
 The physical deployment model relies on containerized microservices (Docker) across distributed sites:
 \begin{itemize}
     \item Each regional warehouse hosts a local validator container divided in two components: The blockchain module and the networking module. 
-    \item Client devices connect via secure REST/gRPC endpoints exposed by local API gateways.
+    \item Client devices connect via secure REST endpoints exposed by local API gateways.
     \item Peer-to-peer (P2P) communication among validator containers uses encrypted TCP channels over enterprise VPN tunnels.
 \end{itemize}
 
@@ -263,24 +274,23 @@ The physical deployment model relies on containerized microservices (Docker) acr
 To manage implementation risk, development is divided into three incremental tiers:
 
 \begin{description}
-    \item[\textbf{Tier 1: Minimal Viable Product (MVP)}]\hfill
+    \item[\textbf{Tier 1: Blockchain, Networking \& Transaction Handling}]\hfill
     \begin{itemize}
-        \item In-memory append-only blockchain storage module.
+        \item In-memory append-only blockchain storage module and Mempool manager.
         \item Single-node API server with basic CLI client for inbound/outbound logging.
         \item Cryptographic signature generation and SHA-256 block linking.
     \end{itemize}
 
-    \item[\textbf{Tier 2: Distributed Consensus \& Persistence}]\hfill
+    \item[\textbf{Tier 2: Distributed Consensus \& Leader Election}]\hfill
     \begin{itemize}
-        \item Multi-node network execution with PoA consensus implementation.
-        \item Disk persistence engine (LevelDB/RocksDB) for state recovery.
+        \item Multi-node network execution with PoA and consensus implementation (with anti-byzantine behaviour).
+        \item Disk persistence engine for state recovery.
         \item Compensating transaction protocol for error remediation.
     \end{itemize}
 
     \item[\textbf{Tier 3: Advanced Features \& Fault Injection}]\hfill
     \begin{itemize}
         \item Web-based dashboard interface for warehouse operators.
-        \item Role-Based Access Control (RBAC) certificate verification module.
         \item Simulated Byzantine fault injection framework for robustness testing under network partition and node crash conditions.
     \end{itemize}
 \end{description}
