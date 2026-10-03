@@ -2,7 +2,7 @@ defmodule InventoryNode.ConsensusEngine do
   use GenServer
   require Logger
 
-  @round_timeout 5000 # Tempo massimo per chiudere un blocco prima di cambiare Proposer
+  @round_timeout 8000 # tempo massimo per chiudere un blocco prima di cambiare Proposer
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, :ok, opts ++ [name: __MODULE__])
@@ -33,13 +33,14 @@ defmodule InventoryNode.ConsensusEngine do
       quorum: quorum,
 
       # Stato BFT
-      current_height: 1,      # Numero del blocco
-      current_round: 0,       # Tentativo corrente per questa altezza
+      current_height: 1,      # numero del blocco
+      current_round: 0,       # tentativo corrente per questa altezza
       timer_ref: nil,
 
-      # Accumulatori per le fasi BFT
+      # contatori per le fasi BFT
       prepare_votes: MapSet.new(),
       commit_votes: MapSet.new(),
+      round_change_votes: %{},
 
       # Dati del blocco in lavorazione
       pending_block: nil
@@ -57,11 +58,11 @@ defmodule InventoryNode.ConsensusEngine do
     if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
     timer_ref = Process.send_after(self(), :round_timeout, @round_timeout)
 
-    # Il proposer è deterministico: (Altezza + Round) mod numero totale di nodi
+    # il proposer è deterministico: (altezza + round) mod (numero totale di nodi)
     proposer_index = rem(state.current_height + state.current_round, length(state.validators))
     current_proposer = Enum.at(state.validators, proposer_index)
 
-    # Pulisce i voti del round precedente
+    # pulisce i voti del round precedente
     new_state = %{state |
       timer_ref: timer_ref,
       prepare_votes: MapSet.new(),
@@ -80,14 +81,86 @@ defmodule InventoryNode.ConsensusEngine do
 
   @impl true
   def handle_info(:round_timeout, state) do
-    Logger.warning("Timeout blocco #{state.current_height}. Avvio Round Change a #{state.current_round + 1}")
-    # Se il proposer è collassato o bizantino, si incrementa il round e si passa al prossimo
-    new_state = %{state | current_round: state.current_round + 1}
-    {:noreply, start_round(new_state)}
+    target_round = state.current_round + 1
+    Logger.warning("Timeout blocco #{state.current_height}. Avvio fase ROUND_CHANGE verso il round #{target_round}")
+
+    # richiede la firma per il cambio round
+    payload = %{
+      "flag" => "round_change",
+      "height" => state.current_height,
+      "target_round" => target_round,
+      "validator_id" => state.node_id,
+      "signature" => nil
+    }
+    payload = send_to_python_service(payload, state.python_host, state.python_port)
+
+    # crea il messaggio e lo invia a tutti i peers
+    msg = {:round_change, payload}
+    broadcast_to_all(state.peers, msg)
+
+    # si aspettiamo il quorum
+    {:noreply, state}
   end
 
-  # FASE 1: PRE-PREPARE (proposta del leader)
 
+  # ROUND CHANGE (in caso di: timeout o proposer bizantino (2 blocchi diversi proposti))
+
+  @impl true
+  def handle_cast({:round_change, payload}, state) do
+    engine_pid = self()
+
+
+    # asincrona
+    Task.start(fn ->
+      is_valid = send_to_python_service(payload, state.python_host, state.python_port)
+      send(engine_pid, {:verified_round_change, height, target_round, validator_id, is_valid})
+    end)
+
+    {:noreply, state}
+  end
+
+
+
+  @impl true
+  def handle_info({:verified_round_change, height, target_round, validator_id, true}, state) do
+    # Accettiamo il voto solo se riguarda l'altezza corrente e un round futuro
+    if height == state.current_height and target_round > state.current_round do
+
+      # Recupera i voti attuali per questo specifico target_round, oppure crea un nuovo MapSet
+      current_votes = Map.get(state.round_change_votes, target_round, MapSet.new())
+      new_votes = MapSet.put(current_votes, validator_id)
+
+      new_round_change_map = Map.put(state.round_change_votes, target_round, new_votes)
+      new_state = %{state | round_change_votes: new_round_change_map}
+
+      Logger.info("Ricevuto voto ROUND_CHANGE per round #{target_round} da #{validator_id} (#{MapSet.size(new_votes)}/#{state.quorum})")
+
+      # Se raggiungiamo il Quorum (2f + 1)
+      if MapSet.size(new_votes) == state.quorum do
+        Logger.warning("QUORUM RAGGIUNTO per il cambio round! Transizione al round #{target_round}")
+
+        # Aggiorniamo il round corrente e puliamo i voti di questo target_round
+        final_state = %{new_state |
+          current_round: target_round,
+          round_change_votes: Map.delete(new_round_change_map, target_round)
+        }
+
+        # Ora che abbiamo il consenso della rete, possiamo far ripartire il giro
+        {:noreply, start_round(final_state)}
+      else
+        {:noreply, new_state}
+      end
+    else
+      # Ignora voti per altezze passate o round vecchi
+      {:noreply, state}
+    end
+  end
+
+  def handle_info({:verified_round_change, _, _, validator_id, false}, state), do: ignore_bad_sig(validator_id, state)
+
+
+
+  # FASE 1: PRE-PREPARE (proposta del leader)
 
   defp propose_block(state) do
    msg = %{flag: "prepare_block", node_id: Node.self()}
@@ -105,7 +178,7 @@ defmodule InventoryNode.ConsensusEngine do
     msg = {:pre_prepare, state.current_height, state.current_round, state.node_id, block_data, signature}
 
     # Invia a TUTTI
-    broadcast_to_all(state.peers, state.node_id, msg)
+    broadcast_to_all(state.peers, msg)
     state
   end
 
@@ -135,7 +208,7 @@ defmodule InventoryNode.ConsensusEngine do
       signature = send_to_python_service(payload, state.python_host, state.python_port)
 
       msg = {:prepare, height, round, state.node_id, signature}
-      broadcast_to_all(state.peers, state.node_id, msg)
+      broadcast_to_all(state.peers, msg)
 
       {:noreply, %{state | pending_block: block_data}}
     else
@@ -173,7 +246,7 @@ defmodule InventoryNode.ConsensusEngine do
         signature = send_to_python_service(payload, state.python_host, state.python_port)
 
         msg = {:commit, height, round, state.node_id, signature}
-        broadcast_to_all(state.peers, state.node_id, msg)
+        broadcast_to_all(state.peers, msg)
       end
 
       {:noreply, %{state | prepare_votes: new_votes}}
@@ -235,7 +308,7 @@ defmodule InventoryNode.ConsensusEngine do
     {:noreply, state}
   end
 
-  defp broadcast_to_all(peers, self_id, message) do
+  defp broadcast_to_all(peers, message) do
     GenServer.cast(__MODULE__, message)
 
     data = :erlang.term_to_binary(message)

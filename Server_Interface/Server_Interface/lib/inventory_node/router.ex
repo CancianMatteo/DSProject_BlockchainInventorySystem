@@ -43,7 +43,7 @@ defmodule InventoryNode.Router do
        # KEYS SETUP OPERATION
     {:setup_keys, pub_key} ->
       IO.puts("Setup delle chiavi pubbliche e private per la crittografia")
-      case send_to_python_service(%{flag: "setup_keys", from_node: Node.self(), pub_key: pub_key}, python_host, python_port) do
+      case send_to_python_service(%{flag: "setup_keys", from_node: Node.self()}, python_host, python_port) do
         {:ok, pub_key} ->
           broadcast_to_peers(peers, {:setup_keys_warning, Node.self(), pub_key})
 
@@ -75,6 +75,13 @@ defmodule InventoryNode.Router do
         end
 
     end
+
+    {:round_change, payload} ->
+      handle_cast({:round_change, payload})
+    end
+
+
+
 
 
 

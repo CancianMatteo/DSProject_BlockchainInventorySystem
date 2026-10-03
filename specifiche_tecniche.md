@@ -28,7 +28,39 @@ Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requi
   "tx_id": "string",
 } Le transazioni ricevute sono solo da mettere in una lista (o meglio ancora un set) di 'transazioni pendenti'. Queste poi vengono rimosse quando un blocco proposto e CONFERMATO viene scritto nella blockchain.
 
-- JSON di forma {flag: "setup_keys", from_node: Node.self(), pub_key: pub_key}: deve generare chiave pubblica e privata del nodo richiedente e salvarle per le future firme, ritornando a questo messaggio un JSON {"flag": "setup_keys", "pub_key": pub_key}. Inoltre deve essere presente un dizionario con le chiavi pubbliche degli altri peers (nodo_A: pubkey_a)
+- JSON di forma {flag: "setup_keys", from_node: Node.self()}: deve generare chiave pubblica e privata del nodo richiedente e salvarle per le future firme, ritornando a questo messaggio un JSON {"flag": "setup_keys", "pub_key": pub_key}. Inoltre deve essere presente un dizionario con le chiavi pubbliche degli altri peers (nodo_A: pubkey_a)
 
 - JSON di forma {flag: "setup_keys_warning", from_node: from_node, pub_key: pub_key}: ricevi la chiave pubblica di un'altro nodo appena acceso e si deve registrare nel dizionario di chiavi pubbliche degli altri nodi. Deve restituire un JSON {"flag" => "setup_keys_warning", "status" => "success"}.
+
+- JSON di forma {flag: "prepare_block", node_id: Node.self()}: prepara un blocco in formato json di forma:
+{
+  "hash": "0x8f4b2c9a...e31d",
+  "header": {
+    "height": 101,
+    "previous_hash": "0x3a1b...99df",
+    "timestamp": 1696322400,
+    "proposer": "0xValidatorC_Address",
+    "round": 1,
+    "transactions_root": "0x7c4e...11bb",
+    "state_root": "0x9d2a...55cc",
+    "commit_seals": [
+      "0xSignature_ValidatorA...",
+      "0xSignature_ValidatorC...",
+      "0xSignature_ValidatorD..."
+    ]
+  },
+  "transactions": [
+    {
+  "flag": "transaction",
+  "from_node": "string" (client),
+  "tx_type": "string",
+  "item_id": "string",
+  "quantity": "int",
+  "location": "string",
+  "timestamp": "string",
+  "tx_id": "string",
+} 
+  ]
+}
+
 
