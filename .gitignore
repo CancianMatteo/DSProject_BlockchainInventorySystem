@@ -5,3 +5,6 @@
 *.synctex.gz
 *.out
 *.toc
+.venv
+.pytest_cache
+__pycache__
