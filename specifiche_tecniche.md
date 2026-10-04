@@ -32,6 +32,7 @@ Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requi
 
 - JSON di forma {flag: "setup_keys_warning", from_node: from_node, pub_key: pub_key}: ricevi la chiave pubblica di un'altro nodo appena acceso e si deve registrare nel dizionario di chiavi pubbliche degli altri nodi. Deve restituire un JSON {"flag" => "setup_keys_warning", "status" => "success"}.
 
+
 - JSON di forma {flag: "prepare_block", node_id: Node.self()}: prepara un blocco in formato json di forma:
 {
   "hash": "0x8f4b2c9a...e31d",
@@ -62,5 +63,25 @@ Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requi
 } 
   ]
 }
+
+- JSON di forma {
+      "flag" => "round_change",
+      "height" => state.current_height,
+      "target_round" => target_round,
+      "validator_id" => state.node_id,
+      "signature" => nil
+    } : Bisogna semplicemente aggiungere la firma del nodo che lo richiede e ritornare lo stesso JSON ma con la firma
+
+- JSON di forma {
+      "flag" => "verified_round_change",
+      "height" => state.current_height,
+      "target_round" => target_round,
+      "validator_id" => state.node_id,
+      "signature" => signature
+    } : in questo caso bisogna verificare la 'signature' del nodo "validator_id" con la sua chiave pubblica, ritornando un JSON con {"status": "valid"} o {"status": "invalid"}
+
+- JSON di forma 
+
+
 
 

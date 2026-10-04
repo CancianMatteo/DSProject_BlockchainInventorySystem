@@ -109,11 +109,18 @@ defmodule InventoryNode.ConsensusEngine do
   def handle_cast({:round_change, payload}, state) do
     engine_pid = self()
 
-
+    payload["flag"] = "verified_round_change" # cambia il flag per la verifica
     # asincrona
     Task.start(fn ->
       is_valid = send_to_python_service(payload, state.python_host, state.python_port)
-      send(engine_pid, {:verified_round_change, height, target_round, validator_id, is_valid})
+      if is_valid["status"] == "valid" do
+        Logger.info("Firma ROUND_CHANGE verificata per round #{payload["target_round"]} da #{payload["validator_id"]}")
+        send(engine_pid, {:verified_round_change, payload["height"], payload["target_round"], payload["validator_id"], true})
+
+      else
+        Logger.error("Firma ROUND_CHANGE NON valida per round #{payload["target_round"]} da #{payload["validator_id"]}")
+      end
+
     end)
 
     {:noreply, state}
@@ -135,17 +142,17 @@ defmodule InventoryNode.ConsensusEngine do
 
       Logger.info("Ricevuto voto ROUND_CHANGE per round #{target_round} da #{validator_id} (#{MapSet.size(new_votes)}/#{state.quorum})")
 
-      # Se raggiungiamo il Quorum (2f + 1)
+      # Quorum (2f + 1)
       if MapSet.size(new_votes) == state.quorum do
         Logger.warning("QUORUM RAGGIUNTO per il cambio round! Transizione al round #{target_round}")
 
-        # Aggiorniamo il round corrente e puliamo i voti di questo target_round
+        # aggiorniamo il round corrente e puliamo i voti di questo target_round
         final_state = %{new_state |
           current_round: target_round,
           round_change_votes: Map.delete(new_round_change_map, target_round)
         }
 
-        # Ora che abbiamo il consenso della rete, possiamo far ripartire il giro
+        # con il consenso della rete, possiamo far ripartire il giro
         {:noreply, start_round(final_state)}
       else
         {:noreply, new_state}

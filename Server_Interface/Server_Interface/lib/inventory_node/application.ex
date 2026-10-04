@@ -18,7 +18,7 @@ defmodule InventoryNode.Application do
       InventoryNode.Mempool,
       InventoryNode.ConsensusEngine,
       # Ascolta i client esterni (Java, Web) in JSON
-     {Server_Interface.ClientListener, 5000},
+     {Server_Interface.ClientListener, 6000},
 
       # Ascolta gli altri nodi Elixir in Erlang Binary
      {Server_Interface.ClusterListener, 4000},
