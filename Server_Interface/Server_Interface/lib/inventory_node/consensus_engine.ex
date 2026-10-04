@@ -173,6 +173,16 @@ defmodule InventoryNode.ConsensusEngine do
    msg = %{flag: "prepare_block", node_id: Node.self()}
     block_data = send_to_python_service(msg, state.python_host, state.python_port)
 
+    case block_data do
+      {} ->
+        Logger.warning("Nessun blocco da proporre al momento.")
+        state
+
+      _ ->
+        Logger.info("Proponendo nuovo blocco: #{inspect(block_data)}")
+        send_pre_prepare(block_data, state)
+    end
+
     payload = %{
       "flag" => "pre_prepare",
       "height" => state.current_height,
@@ -351,10 +361,10 @@ defmodule InventoryNode.ConsensusEngine do
         result = case :gen_tcp.recv(socket, 0, 2000) do
           {:ok, response_json} ->
             case Jason.decode(response_json) do
-              {:ok, %{"status" => "valid"}} -> true
-
-
-              _ -> false
+              {:ok, parsed_response} -> parsed_response
+              {:error, reason} ->
+                Logger.error("Errore nel parsing della risposta JSON dal servizio Python: #{inspect(reason)}")
+                false
             end
           {:error, reason} ->
             Logger.error("Errore di lettura dal servizio Python: #{inspect(reason)}")

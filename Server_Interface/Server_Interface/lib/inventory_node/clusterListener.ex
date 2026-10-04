@@ -10,14 +10,15 @@ defmodule Server_Interface.ClusterListener do
 
     {:ok, socket} = :gen_tcp.listen(port, [:binary, packet: 4, active: false, reuseaddr: true])
     Logger.info("Cluster Listener (Erlang) in ascolto sulla porta #{port}")
+    msg = {:setup_keys} # setup iniziale delle chiavi pubbliche tra nodi
+    Task.start(fn -> InventoryNode.Router.handle_payload(msg) end)
+
     loop_acceptor(socket)
   end
 
   defp loop_acceptor(socket) do
     {:ok, client} = :gen_tcp.accept(socket)
     Task.start(fn -> serve(client) end)
-    msg = {:setup_keys, "pub_key"} # setup iniziale delle chiavi pubbliche tra nodi
-    Task.start(fn -> InventoryNode.Router.handle_payload(msg) end)
 
     loop_acceptor(socket)
   end

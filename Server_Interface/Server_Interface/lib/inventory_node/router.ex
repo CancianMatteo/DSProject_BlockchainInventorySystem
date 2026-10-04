@@ -40,41 +40,48 @@ defmodule InventoryNode.Router do
         end
 
 
+
        # KEYS SETUP OPERATION
-    {:setup_keys, pub_key} ->
+    {:setup_keys} ->
       IO.puts("Setup delle chiavi pubbliche e private per la crittografia")
       case send_to_python_service(%{flag: "setup_keys", from_node: Node.self()}, python_host, python_port) do
-        {:ok, pub_key} ->
-          broadcast_to_peers(peers, {:setup_keys_warning, Node.self(), pub_key})
+        {:ok, %{"flag" => "setup_keys", "pub_key" => pub_key}} ->
+            broadcast_to_peers(peers, {:setup_keys_warning, Node.self(), pub_key})
 
-        {:error, reason} ->
-          IO.puts("Errore dal servizio Python: #{inspect(reason)}")
+        {:error, %{"status" => "error", "reason" => reason}} ->
+              {:error, reason}
+
+            _ ->
+              {:error, "Risposta Python malformata"}
         end
 
         # KEYS SETUP WARNING OPERATION
     {:setup_keys_warning, from_node, pub_key} ->
       IO.puts("Ricevuto avviso di setup chiavi da #{inspect(from_node)}")
       case send_to_python_service(%{flag: "setup_keys_warning", from_node: from_node, pub_key: pub_key}, python_host, python_port) do
-        {:ok, pub_key} ->
+        {:ok, %{"flag" => "setup_keys_warning", "status" => "success"}} ->
           IO.puts("Chiave pubblica del nodo #{inspect(from_node)} registrata correttamente.")
 
-        {:error, reason} ->
-          IO.puts("Errore dal servizio Python: #{inspect(reason)}")
+        {:error, %{"status" => "error", "reason" => reason}} ->
+              {:error, reason}
+
+            _ ->
+              {:error, "Risposta Python malformata"}
         end
 
-        # NEW BLOCK REQUEST OPERATION
-    %{"flag" => "new_block_req", "block_data" => block_data, "signature" => signature} ->
-      IO.puts("Ricevuta richiesta di nuovo blocco: #{inspect(block_data)}")
-      case send_to_python_service(%{flag: "new_block_req", block_data: block_data}, python_host, python_port) do
-        {:ok, response} ->
-          IO.puts("Risposta dal servizio Python: #{inspect(response)}")
-          response
+    #     # NEW BLOCK REQUEST OPERATION
+    # %{"flag" => "new_block_req", "block_data" => block_data, "signature" => signature} ->
+    #   IO.puts("Ricevuta richiesta di nuovo blocco: #{inspect(block_data)}")
+    #   case send_to_python_service(%{flag: "new_block_req", block_data: block_data}, python_host, python_port) do
+    #     {:ok, response} ->
+    #       IO.puts("Risposta dal servizio Python: #{inspect(response)}")
+    #       response
 
-        {:error, reason} ->
-          IO.puts("Errore dal servizio Python: #{inspect(reason)}")
-        end
+    #     {:error, reason} ->
+    #       IO.puts("Errore dal servizio Python: #{inspect(reason)}")
+    #     end
 
-    end
+
 
     {:round_change, payload} ->
       handle_cast({:round_change, payload})
@@ -94,50 +101,29 @@ defmodule InventoryNode.Router do
 
   # Funzioni di supporto
 
-  def send_to_python_service(payload, python_host, python_port) do
-  # coding the payload to JSON
-  json_request = Jason.encode!(payload)
-
-  case :gen_tcp.connect(python_host, python_port, [:binary, active: false], 2000) do
-    {:ok, socket} ->
-      :gen_tcp.send(socket, json_request)
-
-      # JSON response from Python
-      result = case :gen_tcp.recv(socket, 0, 2000) do
-        {:ok, raw_json} ->
-
-          parsed_response = Jason.decode!(raw_json)
-
-          # JSON to elixir tuple
-          case parsed_response do
-
-            {:ok, %{"flag" => "setup_keys", "pub_key" => pub_key}} ->
-              {:ok, pub_key}
-
-            {:ok, %{"flag" => "setup_keys_warning", "status" => "success"}} ->
-              {:ok, "setup_keys_warning"}
-
-            {:ok,%{ _ => data}} ->
-              {:ok, data}
-
-            {:error, %{"status" => "error", "reason" => reason}} ->
-              {:error, reason}
-
-            _ ->
-              {:error, "Risposta Python malformata"}
-          end
-
-        {:error, reason} ->
-          {:error, "Timeout o errore di lettura: #{inspect(reason)}"}
-      end
-
-      :gen_tcp.close(socket)
-      result
-
-    {:error, reason} ->
-      {:error, "Impossibile connettersi a Python: #{inspect(reason)}"}
+ defp send_to_python_service(payload, py_host, py_port) do
+    case :gen_tcp.connect(py_host, py_port, [:binary, active: false], 2000) do
+      {:ok, socket} ->
+        :gen_tcp.send(socket, Jason.encode!(payload))
+        result = case :gen_tcp.recv(socket, 0, 2000) do
+          {:ok, response_json} ->
+            case Jason.decode(response_json) do
+              {:ok, parsed_response} -> parsed_response
+              {:error, reason} ->
+                Logger.error("Errore nel parsing della risposta JSON dal servizio Python: #{inspect(reason)}")
+                false
+            end
+          {:error, reason} ->
+            Logger.error("Errore di lettura dal servizio Python: #{inspect(reason)}")
+            false
+        end
+        :gen_tcp.close(socket)
+        result
+      _ -> false
+    end
   end
-end
+
+
 
   defp broadcast_to_peers(peers, message) do
     data = :erlang.term_to_binary(message)
@@ -146,5 +132,5 @@ end
     end)
   end
 
-  end
+end
 end
