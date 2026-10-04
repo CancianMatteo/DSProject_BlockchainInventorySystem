@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -61,8 +63,13 @@ class CheckChainSyncRequest(BaseModel):
 
 
 class AddBlockRequest(BaseModel):
-    session_token: str
-    prev_block_hash: str | None = None
-    changes: dict[str, int]
-    item_catalog: dict[str, dict[str, str | None]] = Field(default_factory=dict)
-    author_sign: str | None = None
+    block: dict[str, Any] | None = None
+    votes: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SubmitTransactionRequest(BaseModel):
+    transaction: dict[str, Any]
+
+
+class BuildProposalRequest(BaseModel):
+    round: int = Field(ge=0)

@@ -12,8 +12,6 @@ Il modulo `InventoryNode.Router` analizzato funge da dispatcher, inoltrando le r
 
 Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requisiti del progetto (FR-1, FR-2, FR-3), quando un client (nodo operatore) invia una transazione al backend (tramite il `ClientListener` che si trova in ascolto sulla porta 5000 del host base), il payload JSON deve rispettare la seguente struttura:
 
-```json per le transazioni
-
 
 ## API Python deve gestire i seguenti messaggi:
 
@@ -80,8 +78,91 @@ Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requi
       "signature" => signature
     } : in questo caso bisogna verificare la 'signature' del nodo "validator_id" con la sua chiave pubblica, ritornando un JSON con {"status": "valid"} o {"status": "invalid"}
 
-- JSON di forma 
+# Dettagli Implementativi: Router e Struttura Transazioni (Elixir)
+
+Questo documento definisce i dettagli implementativi per la gestione delle transazioni nel sistema di inventario basato su blockchain permissioned[cite: 1], prendendo spunto dall'implementazione corrente in Elixir. In particolare, si concentra sulla struttura JSON dei payload inviati dai client al backend, gestiti dai listener del livello di rete.
+
+## Contesto Architetturale
+
+Come illustrato nell'immagine "image_fcef1b.png"[cite: 1], il sistema Elixir funge da interfaccia di rete (Server Interface)[cite: 1]. Nello specifico, il modulo `ClusterListener` (visibile nello screenshot) si occupa di ascoltare le comunicazioni intra-cluster (tra i nodi validatori) su una porta dedicata, decodificando i messaggi binari tramite `:erlang.binary_to_term` e inoltrandoli a `InventoryNode.Router.handle_payload`[cite: 1]. Parallelamente, è presente un `ClientListener` (non mostrato in dettaglio, ma deducibile dalla struttura dei file) che accetta richieste in ingresso dai client[cite: 1].
+
+Il modulo `InventoryNode.Router` analizzato funge da dispatcher, inoltrando le richieste (come le transazioni o il setup delle chiavi) al servizio Python (che gestirà la Mempool e la logica di consenso BFT).
+
+## Struttura del Payload JSON per le Transazioni
+
+Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requisiti del progetto (FR-1, FR-2, FR-3), quando un client (nodo operatore) invia una transazione al backend (tramite il `ClientListener` che si trova in ascolto sulla porta 5000 del host base), il payload JSON deve rispettare la seguente struttura:
 
 
+## API Python deve gestire i seguenti messaggi:
+
+-JSON di forma {
+  "flag": "transaction",
+  "from_node": "string" (client),
+  "tx_type": "string",
+  "item_id": "string",
+  "quantity": "int",
+  "location": "string",
+  "timestamp": "string",
+  "tx_id": "string",
+} Le transazioni ricevute sono solo da mettere in una lista (o meglio ancora un set) di 'transazioni pendenti'. Queste poi vengono rimosse quando un blocco proposto e CONFERMATO viene scritto nella blockchain.
+
+- JSON di forma {flag: "setup_keys", from_node: Node.self()}: deve generare chiave pubblica e privata del nodo richiedente e salvarle per le future firme, ritornando a questo messaggio un JSON {"flag": "setup_keys", "pub_key": pub_key}. Inoltre deve essere presente un dizionario con le chiavi pubbliche degli altri peers (nodo_A: pubkey_a)
+
+- JSON di forma {flag: "setup_keys_warning", from_node: from_node, pub_key: pub_key}: ricevi la chiave pubblica di un'altro nodo appena acceso e si deve registrare nel dizionario di chiavi pubbliche degli altri nodi. Deve restituire un JSON {"flag" => "setup_keys_warning", "status" => "success"}.
+
+- JSON di forma {flag: "prepare_block", node_id: Node.self()}: prepara un blocco in formato json di forma:
+{
+  "hash": "0x8f4b2c9a...e31d",
+  "header": {
+    "height": 101,
+    "previous_hash": "0x3a1b...99df",
+    "proposer": "0xValidatorC_Address",
+    "round": 1,
+    "transactions_root": "0x7c4e...11bb",
+    "state_root": "0x9d2a...55cc",
+    "commit_seals": [
+      "0xSignature_ValidatorA...",
+      "0xSignature_ValidatorC...",
+      "0xSignature_ValidatorD..."
+    ]
+  },
+  "transactions": [
+    {
+  "flag": "transaction",
+  "from_node": "string" (client),
+  "tx_type": "string",
+  "item_id": "string",
+  "quantity": "int",
+  "location": "string",
+  "timestamp": "string",
+  "tx_id": "string",
+} 
+  ]
+}
 
 
+## Assunzioni e limiti del consenso
+
+Il flusso previsto resta: proposta del blocco, voti firmati dei validatori e
+certificato formato al raggiungimento del quorum. Per `N` validatori il quorum
+richiesto è `floor(N/2) + 1`: con quattro validatori servono tre voti. Si
+assume che almeno questo quorum di validatori corretti sia disponibile e
+concordi sulla stessa proposta. In questa assunzione, quattro nodi consentono
+di tollerare un validatore guasto, non responsivo o malevolo; per tollerarne
+due e mantenere un quorum di tre servono almeno cinque nodi.
+Questa tolleranza riguarda la disponibilità del quorum: non costituisce una
+prova di sicurezza contro l'equivocation di più validatori malevoli.
+
+Ogni validatore può votare una sola volta per altezza. Un timeout o il cambio di
+proposer non autorizza a votare un hash diverso alla stessa altezza. Se voti
+onesti sono stati emessi per un hash che non raggiunge il quorum, il blocco può
+restare senza certificato e l'altezza può bloccarsi. Questa regola, da sola,
+non garantisce la liveness in presenza di equivocation o proposte concorrenti;
+non si assume né si dichiara una garanzia completa di liveness BFT.
+
+Un retry del proposer è sicuro solo se conserva la proposta già votata e
+permette di raccogliere ulteriori voti per quello stesso blocco. Proporre un
+nuovo hash dopo che un validatore ha già votato non è consentito. Un failover
+che possa introdurre una proposta diversa richiederebbe prove di round-change
+e regole di lock validate end-to-end, non definite dall'implementazione
+corrente.

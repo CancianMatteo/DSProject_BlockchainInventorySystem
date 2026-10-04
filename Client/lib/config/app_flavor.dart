@@ -6,11 +6,11 @@ class AppFlavor {
 
   static const String _defaultProdBaseUrl = String.fromEnvironment(
     'API_BASE_URL_PROD',
-    defaultValue: 'https://bis.samuel-daros.it',
+    defaultValue: 'http://bis.samuel-daros.it',
   );
   static const String _defaultDevBaseUrl = String.fromEnvironment(
     'API_BASE_URL_DEV',
-    defaultValue: 'https://bis-dev.samuel-daros.it',
+    defaultValue: 'http://bis-dev.samuel-daros.it',
   );
 
   static String get flavor => _rawFlavor.trim().toLowerCase();

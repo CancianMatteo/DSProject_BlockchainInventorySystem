@@ -2,8 +2,6 @@ from contextlib import asynccontextmanager
 import json
 
 from fastapi import FastAPI
-from fastapi import Request
-
 from app.api.routes_auth import router as auth_router
 from app.api.routes_chain import router as chain_router
 from app.api.routes_health import router as health_router
@@ -46,12 +44,6 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Blockchain Inventory System Backend", lifespan=lifespan)
 install_exception_handlers(app)
 
-
-@app.middleware("http")
-async def add_security_headers(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    return response
 
 app.include_router(auth_router, prefix=settings.api_prefix)
 app.include_router(notifications_router, prefix=settings.api_prefix)

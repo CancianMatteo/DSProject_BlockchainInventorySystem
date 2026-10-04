@@ -40,6 +40,28 @@ class ChainBlock(Base):
     server_sign: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class PendingTransaction(Base):
+    __tablename__ = "pending_transactions"
+
+    tx_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    transaction_json: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", index=True)
+
+
+class BlockVote(Base):
+    __tablename__ = "block_votes"
+    __table_args__ = (
+        UniqueConstraint("height", "round", "validator_id", name="uq_block_votes_height_round_validator"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    height: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    round: Mapped[int] = mapped_column(Integer, nullable=False)
+    block_hash: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    validator_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class RevokedToken(Base):
     __tablename__ = "revoked_tokens"
 

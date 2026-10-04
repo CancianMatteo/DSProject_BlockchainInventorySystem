@@ -53,8 +53,8 @@ L'applicazione utilizza una barra di navigazione inferiore fissa a 4 sezioni.
 ## 3. Backend Integration
 
 - **X-App-Token:** Tutte le chiamate API includono un header `X-App-Token` con un valore segreto per l'autenticazione a livello di applicazione.
-- **HTTPS/TLS:** L'app usa HTTPS di default e blocca il traffico HTTP non sicuro salvo host locali (`localhost`, `127.0.0.1`, `10.0.2.2`).
-- **Certificati self-signed (debug):** Solo in debug e su host configurato, e solo se esplicitamente abilitato con `ALLOW_SELF_SIGNED_TLS=true`.
+- **Trasporto API:** Le chiamate al backend usano HTTP non cifrato.
+- **Scrittura dei blocchi:** Il backend accetta solo blocchi proposti con almeno tre voti validi di validatori distinti; le richieste legacy del client con sole variazioni di inventario vengono rifiutate.
 - **Endpoint per flavor (build-time):**
     - `APP_FLAVOR=prod` (default) usa `API_BASE_URL_PROD`.
     - `APP_FLAVOR=dev` usa `API_BASE_URL_DEV`.

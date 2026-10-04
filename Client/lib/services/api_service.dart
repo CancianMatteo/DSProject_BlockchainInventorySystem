@@ -1,8 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:http/io_client.dart';
 import 'package:myapp/config/app_flavor.dart';
 import 'package:myapp/models/api_response.dart';
 
@@ -15,10 +13,6 @@ class ApiService {
     'APP_CLIENT_TOKEN',
     defaultValue: '8uvF+PFoF0+rJKCOGVSKo2F0MY4f9dmAgOBfLycxt5E=',
   );
-  static const bool _allowSelfSignedTlsInDebug = bool.fromEnvironment(
-    'ALLOW_SELF_SIGNED_TLS',
-    defaultValue: false,
-  );
 
   static String _resolveConfiguredBaseUrl() {
     const override = String.fromEnvironment('API_BASE_URL', defaultValue: '');
@@ -29,8 +23,7 @@ class ApiService {
   }
 
   late final String _baseUrl = _resolveBaseUrl(_configuredBaseUrl);
-  late final Uri _baseUri = Uri.parse(_baseUrl);
-  late final http.Client _httpClient = _buildHttpClient();
+  final http.Client _httpClient = http.Client();
   final String _appToken = _configuredAppToken;
 
   static String _resolveBaseUrl(String rawUrl) {
@@ -40,38 +33,11 @@ class ApiService {
     }
     final uri = Uri.parse(normalized);
 
-    if (uri.scheme.isEmpty || uri.host.isEmpty) {
+    if (uri.scheme.toLowerCase() != 'http' || uri.host.isEmpty) {
       throw ArgumentError('API_BASE_URL non valido: "$rawUrl"');
     }
 
-    final isHttp = uri.scheme.toLowerCase() == 'http';
-    if (isHttp && !_isLocalDevelopmentHost(uri.host)) {
-      throw ArgumentError(
-        'Endpoint HTTP non sicuro: "$rawUrl". Usa HTTPS per ambienti non locali.',
-      );
-    }
-
     return normalized;
-  }
-
-  static bool _isLocalDevelopmentHost(String host) {
-    final lower = host.toLowerCase();
-    return lower == 'localhost' || lower == '127.0.0.1' || lower == '10.0.2.2';
-  }
-
-  http.Client _buildHttpClient() {
-    if (kDebugMode &&
-        _allowSelfSignedTlsInDebug &&
-        _baseUri.scheme == 'https') {
-      final ioHttpClient = HttpClient();
-      ioHttpClient.badCertificateCallback = (cert, host, port) {
-        // Restrict certificate bypass to the configured API host in debug mode.
-        return host == _baseUri.host;
-      };
-      return IOClient(ioHttpClient);
-    }
-
-    return http.Client();
   }
 
   Uri _buildUri(String path) => Uri.parse('$_baseUrl$path');

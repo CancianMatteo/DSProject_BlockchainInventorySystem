@@ -50,5 +50,5 @@ EXPOSE 8000
 # Volume per la persistenza del database SQLite 
 VOLUME ["/data"]
 
-# Avvio del server con enforcement TLS
+# Avvio del server HTTP
 CMD ["python", "-m", "app.run_server"]

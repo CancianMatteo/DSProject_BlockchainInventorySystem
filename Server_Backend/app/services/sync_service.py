@@ -6,16 +6,18 @@ from app.db import repositories
 from app.services.cache_service import inventory_cache
 
 
-def serialize_block(block) -> dict:
+def serialize_block(db: Session, block) -> dict:
     raw_payload = json.loads(block.changes_json)
     if isinstance(raw_payload, dict) and "changes" in raw_payload:
         changes = raw_payload.get("changes", {})
         item_catalog = raw_payload.get("item_catalog", {})
+        transactions = raw_payload.get("transactions", [])
     else:
         changes = raw_payload
         item_catalog = {}
+        transactions = []
 
-    return {
+    serialized = {
         "n_block": block.n_block,
         "prev_block_hash": block.prev_block_hash,
         "block_hash": block.block_hash,
@@ -24,8 +26,20 @@ def serialize_block(block) -> dict:
         "item_catalog": item_catalog,
         "author_email": block.author_email,
         "author_sign": block.author_sign,
-        "server_sign": block.server_sign,
+        "server_sign": None if block.server_sign == "validator-quorum" else block.server_sign,
+        "transactions": transactions,
+        "votes": [
+            {
+                "height": vote.height,
+                "round": vote.round,
+                "block_hash": vote.block_hash,
+                "validator_id": vote.validator_id,
+                "signature": vote.signature,
+            }
+            for vote in repositories.get_block_votes_for_hash(db, block.block_hash)
+        ],
     }
+    return serialized
 
 
 def check_chain_sync(db: Session, client_block_hash: str | None) -> dict:
@@ -56,7 +70,7 @@ def check_chain_sync(db: Session, client_block_hash: str | None) -> dict:
         return {
             "synced": False,
             "from_hash": matched.block_hash,
-            "missing_blocks": [serialize_block(row) for row in missing],
+            "missing_blocks": [serialize_block(db, row) for row in missing],
             "inventory": inventory,
             "last_hash": latest.block_hash,
         }
@@ -65,7 +79,7 @@ def check_chain_sync(db: Session, client_block_hash: str | None) -> dict:
     return {
         "synced": False,
         "from_hash": None,
-        "missing_blocks": [serialize_block(row) for row in all_blocks],
+        "missing_blocks": [serialize_block(db, row) for row in all_blocks],
         "inventory": inventory,
         "last_hash": latest.block_hash,
     }

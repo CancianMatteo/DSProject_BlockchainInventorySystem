@@ -6,12 +6,6 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     api_prefix: str = "/api/v1"
-    tls_required: bool = True
-    tls_certfile: str | None = "/certs/fullchain.pem"
-    tls_keyfile: str | None = "/certs/privkey.pem"
-    tls_ca_certs: str | None = None
-    proxy_headers: bool = True
-    forwarded_allow_ips: str | None = "127.0.0.1"
 
     db_path: str = "/data/bis.db"
     jwt_secret: str = "change-me-in-production"
@@ -20,6 +14,9 @@ class Settings(BaseSettings):
 
     server_sign_private_key: str | None = None
     server_sign_public_key: str | None = None
+    node_id: str = "node_a"
+    validator_private_key: str | None = None
+    validator_public_keys: str = "{}"
 
     smtp_host: str | None = None
     smtp_port: int = 465
