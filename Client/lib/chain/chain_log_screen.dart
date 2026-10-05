@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart' hide Block;
 import 'package:myapp/models/block.dart';
-import 'package:myapp/notifications/notification_provider.dart';
 import 'package:myapp/services/api_service.dart';
-import 'package:provider/provider.dart';
 
 class ChainLogScreen extends StatefulWidget {
   const ChainLogScreen({super.key});
@@ -13,47 +11,102 @@ class ChainLogScreen extends StatefulWidget {
 }
 
 class _ChainLogScreenState extends State<ChainLogScreen> {
+  static const int _pageSize = 50;
+
   String? _searchQuery;
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
   final ApiService _apiService = ApiService();
   bool _isLoading = true;
+  bool _isLoadingMore = false;
+  bool _hasMore = true;
+  int? _nextBeforeNBlock;
   String? _error;
+  String? _loadMoreError;
   List<Block> _blocks = [];
 
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_loadMoreWhenNearEnd);
     _loadBlocks();
   }
 
-  Future<void> _loadBlocks() async {
+  @override
+  void dispose() {
+    _scrollController
+      ..removeListener(_loadMoreWhenNearEnd)
+      ..dispose();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _loadMoreWhenNearEnd() {
+    if (!_scrollController.hasClients) return;
+    if (_scrollController.position.extentAfter < 300) {
+      _loadBlocks();
+    }
+  }
+
+  Future<void> _loadBlocks({bool reset = false}) async {
+    if (_isLoading || _isLoadingMore || (!reset && !_hasMore)) return;
+    final isFirstPage = reset || _blocks.isEmpty;
+    final beforeNBlock = reset ? null : _nextBeforeNBlock;
+    if (!reset && !isFirstPage && beforeNBlock == null) return;
+
     setState(() {
-      _isLoading = true;
-      _error = null;
+      if (isFirstPage) {
+        _isLoading = true;
+        _error = null;
+      } else {
+        _isLoadingMore = true;
+        _loadMoreError = null;
+      }
+      if (reset) {
+        _hasMore = true;
+        _nextBeforeNBlock = null;
+      }
     });
 
-    final response = await _apiService.checkChainSync('');
+    final response = await _apiService.getChainHistory(
+      limit: _pageSize,
+      beforeNBlock: beforeNBlock,
+    );
     if (!response.ok || response.data == null) {
       if (!mounted) return;
       setState(() {
-        _isLoading = false;
-        _error = response.errorMessage ?? 'Errore caricamento transazioni';
+        final message =
+            response.errorMessage ?? 'Errore caricamento transazioni';
+        if (isFirstPage) {
+          _isLoading = false;
+          _error = message;
+        } else {
+          _isLoadingMore = false;
+          _loadMoreError = message;
+        }
       });
       return;
     }
 
-    final missing = response.data!['missing_blocks'] as List<dynamic>? ?? [];
-    if (mounted) {
-      context.read<NotificationProvider>().ingestChainData(response.data!);
-    }
-    final blocks =
-        missing.whereType<Map<String, dynamic>>().map(Block.fromJson).toList()
-          ..sort((a, b) => b.nBlock.compareTo(a.nBlock));
+    final data = response.data!;
+    final rawBlocks = data['blocks'] as List<dynamic>? ?? [];
+    final blocks = rawBlocks
+        .whereType<Map<String, dynamic>>()
+        .map(Block.fromJson)
+        .toList();
 
     if (!mounted) return;
     setState(() {
-      _blocks = blocks;
+      if (isFirstPage) {
+        _blocks = blocks;
+      } else {
+        _blocks.addAll(blocks);
+      }
+      _hasMore = data['has_more'] == true;
+      _nextBeforeNBlock = (data['next_before_n_block'] as num?)?.toInt();
       _isLoading = false;
+      _isLoadingMore = false;
+      _loadMoreError = null;
     });
   }
 
@@ -61,7 +114,7 @@ class _ChainLogScreenState extends State<ChainLogScreen> {
     if (!ApiService.shouldRunTopChainRefresh()) {
       return;
     }
-    await _loadBlocks();
+    await _loadBlocks(reset: true);
   }
 
   Future<void> _showSearchDialog() async {
@@ -158,8 +211,32 @@ class _ChainLogScreenState extends State<ChainLogScreen> {
               onRefresh: _onTopRefresh,
               child: ListView.builder(
                 physics: const AlwaysScrollableScrollPhysics(),
-                itemCount: filteredBlocks.length,
+                itemCount:
+                    filteredBlocks.length +
+                    (_hasMore || _isLoadingMore || _loadMoreError != null
+                        ? 1
+                        : 0),
                 itemBuilder: (context, index) {
+                  if (index >= filteredBlocks.length) {
+                    if (_loadMoreError != null) {
+                      return TextButton(
+                        onPressed: _loadBlocks,
+                        child: Text('Riprova: $_loadMoreError'),
+                      );
+                    }
+                    if (_isLoadingMore) {
+                      return const Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Center(child: CircularProgressIndicator()),
+                      );
+                    }
+                    return _hasMore
+                        ? TextButton(
+                            onPressed: _loadBlocks,
+                            child: const Text('Carica blocchi precedenti'),
+                          )
+                        : const SizedBox.shrink();
+                  }
                   final block = filteredBlocks[index];
                   return Card(
                     margin: const EdgeInsets.symmetric(
@@ -193,6 +270,7 @@ class _ChainLogScreenState extends State<ChainLogScreen> {
                     ),
                   );
                 },
+                controller: _scrollController,
               ),
             ),
     );

@@ -5,7 +5,7 @@
 This backend is the controller and authoritative model layer for the BIS Flutter client.
 
 Design goals:
-- REST API over HTTP.
+- REST API over HTTPS (TLS terminated at NGINX).
 - Stateless request handling with signed session tokens.
 - Deterministic blockchain validation and append-only chain persistence.
 - Fast inventory reads through in-memory cache (rebuildable from chain).
@@ -49,8 +49,10 @@ Data authority:
 Base path: `/api/v1`
 
 Transport notes:
-- The client and backend communicate over unencrypted HTTP; credentials and API data are visible to network observers, so deployments should be restricted to trusted networks.
-- Backend listens on the configured API port (default `8000`).
+- HTTPS is enabled via NGINX on `bis.samuel-daros.it` (prod) and `bis-dev.samuel-daros.it` (dev).
+- HTTP is not disabled; it redirects to HTTPS.
+- Backend listens on internal port `2900` and should not be exposed publicly.
+- TLS in dev may use self-signed certs for testing; clients must explicitly allow them in debug.
 
 ### 3.1 POST /auth/login
 
@@ -94,7 +96,8 @@ Errors:
 - 500 internal error
 
 Note:
-- Passwords are hashed server-side with argon2id. HTTP is unencrypted, so credentials are exposed to network observers.
+- For strong security, prefer sending plaintext over TLS and hashing server-side with argon2id.
+- If client must send pre-hashed password, store and compare a server-controlled hash of that value.
 
 ### 3.1.1 POST /auth/forgot_pwd
 
@@ -390,58 +393,71 @@ Errors:
 ### 3.6 POST /chain/add_block
 
 Purpose:
-- Validate, certify, persist, and apply a proposed block.
+- Validate, sign, persist, and apply a new block.
 
 Request:
 ```json
 {
-	"block": {
-		"height": 42,
-		"round": 0,
-		"prev_block_hash": "...",
-		"transactions": [],
-		"block_hash": "..."
+	"session_token": "...",
+	"prev_block_hash": "...",
+	"changes": {
+		"item_1": -3,
+		"item_2": 10
 	},
-	"votes": [
-		{"height": 42, "round": 0, "block_hash": "...", "validator_id": "node_a", "signature": "..."},
-		{"height": 42, "round": 0, "block_hash": "...", "validator_id": "node_b", "signature": "..."},
-		{"height": 42, "round": 0, "block_hash": "...", "validator_id": "node_c", "signature": "..."}
-	]
+	"author_sign": "optional_client_signature"
 }
 ```
 
 Controller validation:
-1. Validate every transaction's Ed25519 signature and required fields.
-2. Require `height` to equal the current chain height plus one and `prev_block_hash` to match the current tip.
-3. Recompute `block_hash` as SHA-256 of canonical JSON containing `height`, `prev_block_hash`, and `transactions`.
-4. Reject transaction IDs already present in the chain or duplicated in the proposal.
-5. Verify at least three distinct configured validator signatures over the proposed block hash, height, and round.
-6. Simulate the inventory transition; reject unknown outbound items and any negative resulting quantity.
-7. Persist the block and validator votes in one database transaction, then update the inventory cache.
+1. Validate session token.
+2. Validate payload schema and non-empty `changes`.
+3. Ensure `prev_block_hash` equals current latest hash.
+4. Simulate balance update on cache snapshot:
+	 - each resulting quantity must be >= 0
+	 - unknown item allowed only if delta > 0
+5. Build canonical block payload and compute `block_hash`.
+6. Sign block server-side (`server_sign`).
+7. Write block in DB transaction.
+8. Commit and update in-memory cache atomically.
 
 Response 201:
 ```json
 {
 	"ok": true,
 	"block_hash": "...",
-	"height": 42,
-	"votes": []
+	"n_block": 42,
+	"new_head_hash": "..."
 }
 ```
 
 Errors:
-- 400 invalid proposal, hash, transaction, signature, or insufficient quorum
-- 409 chain height or previous-hash mismatch
+- 400 invalid request
+- 401 invalid token
+- 409 chain head mismatch (client stale)
 - 422 invalid inventory transition (negative quantity)
 - 500 internal error
 
-`POST /chain/submit_transaction` accepts `{"transaction": {...}}` and stores a
-valid signed transaction in the mempool. A node requests a deterministic
-candidate from `POST /chain/build_proposal` with `{"round": 0}`. The candidate
-is not committed until `POST /chain/add_block` receives three or more distinct
-valid configured validator votes for the same height, round, and hash. Legacy
-requests containing only inventory deltas are rejected; they cannot bypass
-validator certification.
+### 3.7 GET /chain/history
+
+Purpose:
+- Serve the chain log in bounded pages without loading the full chain into the client.
+
+Query parameters:
+- `limit`: page size from 1 to 100 (default 50).
+- `before_n_block`: optional exclusive cursor; fetches blocks with a lower block number.
+
+Blocks are returned newest-first. When `has_more` is true, use
+`next_before_n_block` as the `before_n_block` value on the next request.
+
+Response 200:
+```json
+{
+  "ok": true,
+  "blocks": [],
+  "has_more": true,
+  "next_before_n_block": 51
+}
+```
 
 ---
 
@@ -485,12 +501,6 @@ Indexes:
 - unique index on `block_hash`
 - index on `prev_block_hash`
 - index on `author_email`
-
-### 4.3 Tables: pending_transactions and block_votes
-
-- `pending_transactions` stores canonical, client-signed transactions until finalization.
-- `block_votes` stores validator signatures, uniquely keyed by block height, round, and validator.
-- A committed block records its transactions alongside derived inventory changes and catalog metadata.
 
 Optional table for token revocation:
 - `revoked_tokens(jti TEXT PRIMARY KEY, revoked_at TEXT NOT NULL)`
@@ -536,12 +546,11 @@ Recommended settings:
 - Token TTL: 8-12 hours
 - Secret from env var (`JWT_SECRET`)
 - Password policy: min length, complexity, breached-password check if possible
-- All REST endpoints use HTTP.
+- All endpoints behind HTTPS (reverse proxy in production)
 
 Block signatures:
-- Clients sign canonical transaction JSON with Ed25519.
-- Validators sign canonical JSON of `{height, round, block_hash, validator_id}`.
-- Validator public keys are configured in `VALIDATOR_PUBLIC_KEYS`; blocks without three distinct valid votes are rejected.
+- Use Ed25519 private key stored in container secret.
+- Server signs canonical JSON of block content.
 
 ---
 
@@ -577,7 +586,7 @@ Operational safeguards:
 ## 8. Docker Deployment Blueprint
 
 Container behavior:
-- Single service exposing the plain HTTP API on port `8000` (host port `2900` by default).
+- Single service exposing API on port `8000` (proxied by NGINX from host port `2900`).
 - SQLite DB persisted through mounted volume.
 - Environment-driven configuration.
 
@@ -587,15 +596,12 @@ Environment variables:
 - `API_PORT=8000`
 - `JWT_SECRET=...`
 - `SERVER_SIGN_PRIVATE_KEY=...`
-- `NODE_ID=...`
-- `VALIDATOR_PRIVATE_KEY=...`
-- `VALIDATOR_PUBLIC_KEYS=...`
 - `DB_PATH=/data/bis.db`
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`
 - `SECURITY_ALERT_EMAIL`
 
 Runtime command:
-- `uvicorn app.main:app --host 0.0.0.0 --port 8000`
+- `uvicorn app.main:app --host 0.0.0.0 --port 8000` (TLS disabled; NGINX terminates TLS)
 
 Health endpoints:
 - `GET /health/live`
@@ -604,7 +610,8 @@ Health endpoints:
 Production notes:
 - Use non-root user in container.
 - Mount `/data` volume for SQLite persistence.
-- The API does not configure transport certificates or protocol redirects.
+- Put behind NGINX reverse proxy for TLS termination.
+- Enforce HTTP to HTTPS redirect at NGINX.
 
 ---
 
@@ -628,7 +635,6 @@ Auth&Blockchain server/
 			auth_service.py
 			user_service.py
 			chain_service.py
-			distributed_service.py
 			sync_service.py
 			email_service.py
 			cache_service.py
@@ -655,7 +661,8 @@ Alignment with app blueprint:
 - Password recovery flow calls `/auth/forgot_pwd` then `/auth/reset_login_with_otp`.
 - Admin workflows call `/users/signup_new_user` and `/users/remove_user`.
 - Inventory apply action calls `/chain/add_block`.
-- Chain log screen uses `/chain/check_chain_sync` to fetch missing blocks.
+- Chain log screen uses paginated `GET /chain/history`; chain synchronization
+  continues to use `/chain/check_chain_sync`.
 - Clients poll `/notify` to receive new in-app notifications.
 
 API conventions for client consistency:
@@ -667,9 +674,12 @@ API conventions for client consistency:
 
 ## 11. Open Decisions
 
-1. User removal policy:
+1. Password transport mode:
+	 - Recommended: plaintext over HTTPS + server-side hashing.
+	 - Alternative: client-hash + server-side secondary hash.
+2. User removal policy:
 	 - Recommended: soft disable (audit-safe).
-2. Blockchain scale strategy:
+3. Blockchain scale strategy:
 	 - SQLite is fine for first version.
 	 - For multi-instance/high write throughput, move to PostgreSQL.
 4. Email reliability:
@@ -687,6 +697,7 @@ API conventions for client consistency:
 - [ ] `POST /api/v1/users/remove_user`
 - [ ] `POST /api/v1/users/change_user_pwd`
 - [ ] `POST /api/v1/chain/check_chain_sync`
+- [ ] `GET /api/v1/chain/history`
 - [ ] `POST /api/v1/chain/add_block`
 - [ ] `GET /api/v1/health/live`
 - [ ] `GET /api/v1/health/ready`

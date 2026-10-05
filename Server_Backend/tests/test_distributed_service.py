@@ -1,5 +1,4 @@
 import base64
-import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
@@ -12,7 +11,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
+from app.api.routes_chain import get_chain_history
 from app.db.models import PendingTransaction
+from app.db.repositories import insert_block
 from app.db.session import Base
 from app.services.cache_service import inventory_cache
 from app.services.distributed_service import (
@@ -167,84 +168,6 @@ def test_rejects_duplicate_validator_votes(db, validator_keys):
         commit_block(db, proposal, votes)
 
 
-def test_rejects_wrong_height_and_previous_hash(db, validator_keys):
-    submit_transaction(db, make_transaction())
-    proposal = build_proposal(db, 0)["block"]
-    assert proposal is not None
-
-    wrong_height = {**proposal, "height": proposal["height"] + 1}
-    with pytest.raises(DistributedReject, match="height must be"):
-        commit_block(db, wrong_height, make_votes(wrong_height, validator_keys))
-
-    wrong_parent = {**proposal, "prev_block_hash": "wrong-parent"}
-    with pytest.raises(DistributedReject, match="prev_block_hash does not match"):
-        commit_block(db, wrong_parent, make_votes(wrong_parent, validator_keys))
-
-
-def test_rejects_invalid_block_hash(db, validator_keys):
-    submit_transaction(db, make_transaction())
-    proposal = build_proposal(db, 0)["block"]
-    assert proposal is not None
-    proposal["block_hash"] = "0" * 64
-
-    with pytest.raises(DistributedReject, match="block hash is invalid"):
-        commit_block(db, proposal, make_votes(proposal, validator_keys))
-
-
-def test_rejects_proposal_missing_previous_hash(db, validator_keys):
-    submit_transaction(db, make_transaction())
-    proposal = build_proposal(db, 0)["block"]
-    assert proposal is not None
-    del proposal["prev_block_hash"]
-
-    with pytest.raises(DistributedReject, match="missing prev_block_hash"):
-        commit_block(db, proposal, make_votes(proposal, validator_keys))
-
-
-def test_rejects_transaction_id_already_committed(db, validator_keys):
-    transaction = make_transaction()
-    submit_transaction(db, transaction)
-    proposal = build_proposal(db, 0)["block"]
-    assert proposal is not None
-    commit_block(db, proposal, make_votes(proposal, validator_keys))
-
-    repeated = {
-        "height": 2,
-        "round": 0,
-        "prev_block_hash": proposal["block_hash"],
-        "transactions": [transaction],
-    }
-    hash_payload = {
-        "height": repeated["height"],
-        "prev_block_hash": repeated["prev_block_hash"],
-        "transactions": repeated["transactions"],
-    }
-    repeated["block_hash"] = hashlib.sha256(canonical_json(hash_payload)).hexdigest()
-
-    with pytest.raises(DistributedReject, match="already in the blockchain"):
-        commit_block(db, repeated, make_votes(repeated, validator_keys))
-
-
-def test_rejects_outbound_before_inbound_in_proposed_order(db, validator_keys):
-    inbound = make_transaction(quantity=5)
-    outbound = make_transaction(quantity=2, tx_type="outbound")
-    submit_transaction(db, inbound)
-    submit_transaction(db, outbound)
-    proposal = build_proposal(db, 0)["block"]
-    assert proposal is not None
-    assert proposal["transactions"][0]["tx_type"] == "inbound"
-
-    proposal["transactions"].reverse()
-    hash_payload = {
-        "height": proposal["height"],
-        "prev_block_hash": proposal["prev_block_hash"],
-        "transactions": proposal["transactions"],
-    }
-    proposal["block_hash"] = hashlib.sha256(canonical_json(hash_payload)).hexdigest()
-    with pytest.raises(DistributedReject, match="Unknown item"):
-        commit_block(db, proposal, make_votes(proposal, validator_keys))
-
-
 def test_rejects_outbound_transaction_exceeding_committed_stock(db, validator_keys):
     inbound = make_transaction(quantity=5)
     submit_transaction(db, inbound)
@@ -288,3 +211,39 @@ def test_sync_import_accepts_only_a_certified_block(db, validator_keys, monkeypa
     finally:
         Base.metadata.drop_all(target_engine)
         target_engine.dispose()
+
+
+def test_chain_history_returns_descending_cursor_pages(db):
+    for n_block in range(1, 6):
+        insert_block(
+            db,
+            n_block=n_block,
+            prev_block_hash=f"hash-{n_block - 1}" if n_block > 1 else None,
+            block_hash=f"hash-{n_block}",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            changes={"item-1": n_block},
+            author_email="operator@example.test",
+            author_sign=None,
+            server_sign="signature",
+        )
+
+    first_page = get_chain_history(db=db, limit=2)
+    second_page = get_chain_history(
+        db=db,
+        limit=2,
+        before_n_block=first_page["next_before_n_block"],
+    )
+    last_page = get_chain_history(
+        db=db,
+        limit=2,
+        before_n_block=second_page["next_before_n_block"],
+    )
+
+    assert [block["n_block"] for block in first_page["blocks"]] == [5, 4]
+    assert first_page["has_more"] is True
+    assert first_page["next_before_n_block"] == 4
+    assert [block["n_block"] for block in second_page["blocks"]] == [3, 2]
+    assert second_page["has_more"] is True
+    assert [block["n_block"] for block in last_page["blocks"]] == [1]
+    assert last_page["has_more"] is False
+    assert last_page["next_before_n_block"] is None

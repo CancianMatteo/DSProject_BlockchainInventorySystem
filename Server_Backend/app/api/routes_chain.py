@@ -1,17 +1,33 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.schemas import (
-    AddBlockRequest,
-    BuildProposalRequest,
-    CheckChainSyncRequest,
-    SubmitTransactionRequest,
-)
-from app.core.exceptions import AppError
+from app.api.schemas import AddBlockRequest, CheckChainSyncRequest
+from app.db import repositories
 from app.db.session import get_db
-from app.services import distributed_service, sync_service
+from app.services import chain_service, sync_service
 
 router = APIRouter(prefix="/chain", tags=["chain"])
+
+
+@router.get("/history")
+def get_chain_history(
+    limit: int = Query(default=50, ge=1, le=100),
+    before_n_block: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+):
+    rows = repositories.get_recent_blocks(
+        db,
+        limit=limit + 1,
+        before_n_block=before_n_block,
+    )
+    has_more = len(rows) > limit
+    blocks = rows[:limit]
+    return {
+        "ok": True,
+        "blocks": [sync_service.serialize_block(block) for block in blocks],
+        "has_more": has_more,
+        "next_before_n_block": blocks[-1].n_block if has_more else None,
+    }
 
 
 @router.post("/check_chain_sync")
@@ -20,25 +36,14 @@ def check_chain_sync(payload: CheckChainSyncRequest, db: Session = Depends(get_d
     return {"ok": True, **data}
 
 
-@router.post("/submit_transaction", status_code=202)
-def submit_transaction(payload: SubmitTransactionRequest, db: Session = Depends(get_db)):
-    data = distributed_service.submit_transaction(db, payload.transaction)
-    return {"ok": True, **data}
-
-
-@router.post("/build_proposal")
-def build_proposal(payload: BuildProposalRequest, db: Session = Depends(get_db)):
-    data = distributed_service.build_proposal(db, payload.round)
-    return {"ok": True, **data}
-
-
 @router.post("/add_block", status_code=201)
 def add_block(payload: AddBlockRequest, db: Session = Depends(get_db)):
-    if payload.block is None:
-        raise AppError(
-            "INVALID_PROPOSAL",
-            "A proposed block and at least 3 validator signatures are required",
-            status_code=400,
-        )
-    data = distributed_service.commit_block(db, payload.block, payload.votes)
+    data = chain_service.add_block(
+        db,
+        session_token=payload.session_token,
+        prev_block_hash=payload.prev_block_hash,
+        changes=payload.changes,
+        item_catalog=payload.item_catalog,
+        author_sign=payload.author_sign,
+    )
     return {"ok": True, **data}
