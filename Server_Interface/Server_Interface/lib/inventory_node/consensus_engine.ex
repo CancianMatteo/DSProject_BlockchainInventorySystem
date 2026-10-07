@@ -2,7 +2,7 @@ defmodule InventoryNode.ConsensusEngine do
   use GenServer
   require Logger
 
-  @round_timeout 8000 # tempo massimo per chiudere un blocco prima di cambiare Proposer
+  @round_timeout 10000 # tempo massimo per chiudere un blocco prima di cambiare Proposer
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, :ok, opts ++ [name: __MODULE__])
@@ -36,6 +36,7 @@ defmodule InventoryNode.ConsensusEngine do
       current_height: 1,      # numero del blocco
       current_round: 0,       # tentativo corrente per questa altezza
       timer_ref: nil,
+      temporary_signature: nil,
 
       # contatori per le fasi BFT
       prepare_votes: MapSet.new(),
@@ -43,7 +44,8 @@ defmodule InventoryNode.ConsensusEngine do
       round_change_votes: %{},
 
       # Dati del blocco in lavorazione
-      pending_block: nil
+      pending_block: nil,
+      temporary_signature: nil
     }
 
     Logger.info("BFT-PoA Avviato. Nodo: #{node_id}. Quorum: #{quorum}/#{total_nodes}")
@@ -67,7 +69,8 @@ defmodule InventoryNode.ConsensusEngine do
       timer_ref: timer_ref,
       prepare_votes: MapSet.new(),
       commit_votes: MapSet.new(),
-      pending_block: nil
+      pending_block: nil,
+      temporary_signature: nil
     }
 
     if current_proposer == state.node_id do
@@ -109,17 +112,15 @@ defmodule InventoryNode.ConsensusEngine do
   def handle_cast({:round_change, payload}, state) do
     engine_pid = self()
 
-    payload["flag"] = "verified_round_change" # cambia il flag per la verifica
+    round_payload = payload
+                    |> Map.put("flag", "verified_round_change") # assicura che il flag sia corretto
+
     # asincrona
     Task.start(fn ->
-      is_valid = send_to_python_service(payload, state.python_host, state.python_port)
-      if is_valid["status"] == "valid" do
-        Logger.info("Firma ROUND_CHANGE verificata per round #{payload["target_round"]} da #{payload["validator_id"]}")
-        send(engine_pid, {:verified_round_change, payload["height"], payload["target_round"], payload["validator_id"], true})
+      is_valid = send_to_python_service(round_payload, state.python_host, state.python_port)
 
-      else
-        Logger.error("Firma ROUND_CHANGE NON valida per round #{payload["target_round"]} da #{payload["validator_id"]}")
-      end
+      Logger.info("Firma ROUND_CHANGE verificata per round #{round_payload["target_round"]} da #{round_payload["validator_id"]}")
+      send(engine_pid, {:verified_round_change, round_payload["height"], round_payload["target_round"], round_payload["validator_id"], is_valid["status"]})
 
     end)
 
@@ -127,13 +128,12 @@ defmodule InventoryNode.ConsensusEngine do
   end
 
 
-
   @impl true
   def handle_info({:verified_round_change, height, target_round, validator_id, true}, state) do
     # Accettiamo il voto solo se riguarda l'altezza corrente e un round futuro
     if height == state.current_height and target_round > state.current_round do
 
-      # Recupera i voti attuali per questo specifico target_round, oppure crea un nuovo MapSet
+      # recupera i voti attuali per questo specifico target_round, oppure crea un nuovo MapSet
       current_votes = Map.get(state.round_change_votes, target_round, MapSet.new())
       new_votes = MapSet.put(current_votes, validator_id)
 
@@ -144,7 +144,7 @@ defmodule InventoryNode.ConsensusEngine do
 
       # Quorum (2f + 1)
       if MapSet.size(new_votes) == state.quorum do
-        Logger.warning("QUORUM RAGGIUNTO per il cambio round! Transizione al round #{target_round}")
+        Logger.warning("Quorum raggiunto per il cambio round. Transizione al round #{target_round}")
 
         # aggiorniamo il round corrente e puliamo i voti di questo target_round
         final_state = %{new_state |
@@ -158,7 +158,7 @@ defmodule InventoryNode.ConsensusEngine do
         {:noreply, new_state}
       end
     else
-      # Ignora voti per altezze passate o round vecchi
+      # ignora voti per altezze passate o round vecchi
       {:noreply, state}
     end
   end
@@ -170,83 +170,151 @@ defmodule InventoryNode.ConsensusEngine do
   # FASE 1: PRE-PREPARE (proposta del leader)
 
   defp propose_block(state) do
-   msg = %{flag: "prepare_block", node_id: Node.self()}
-    block_data = send_to_python_service(msg, state.python_host, state.python_port)
+   payload = %{flag: "prepare_block", node_id: Node.self(), current_height: state.current_height}
+    block_data_and_signature = send_to_python_service(payload, state.python_host, state.python_port)
 
-    case block_data do
-      {} ->
-        Logger.warning("Nessun blocco da proporre al momento.")
+    case block_data_and_signature do
+      %{} ->
+        Logger.warning("Nessun blocco da proporre al momento. (Nessuna transazione in coda, crash del nodo o comportamento bizantino del Proposer)")
         state
 
-      _ ->
-        Logger.info("Proponendo nuovo blocco: #{inspect(block_data)}")
-        send_pre_prepare(block_data, state)
+      %{"block_data" => block_data, "proposer_sign" => signature} ->
+        Logger.info("Proponendo nuovo blocco: #{inspect(block_data_and_signature)}")
+        msg = {:pre_prepare, state.current_height, state.current_round, state.node_id, block_data, signature}
+        broadcast_to_all(state.peers, msg)
+        # IL LEADER SALVA IL BLOCCO E SI AUTOVOTA SUBITO
+        new_votes = MapSet.put(state.prepare_votes, state.node_id)
+
+        # Restituisce lo stato aggiornato
+        %{state |
+          pending_block: block_data,
+          temporary_signature: signature,
+          prepare_votes: new_votes
+        }
     end
-
-    payload = %{
-      "flag" => "pre_prepare",
-      "height" => state.current_height,
-      "round" => state.current_round,
-      "proposer_id" => state.node_id,
-      "block" => block_data
-    }
-
-    signature = send_to_python_service(payload, state.python_host, state.python_port)
-    msg = {:pre_prepare, state.current_height, state.current_round, state.node_id, block_data, signature}
-
-    # Invia a TUTTI
-    broadcast_to_all(state.peers, msg)
-    state
   end
 
-  @impl true
-  def handle_cast({:pre_prepare, height, round, proposer_id, block_data, signature}, state) do
-    engine_pid = self()
-    payload = %{"flag" => "pre_prepare", "height" => height, "round" => round, "proposer_id" => proposer_id, "block" => block_data, "signature" => signature, "proposer_id" => proposer_id}
 
-    # Verifica la firma asincronamente
-    Task.start(fn ->
-      is_valid = send_to_python_service(payload, state.python_host, state.python_port)
-      send(engine_pid, {:verified_pre_prepare, height, round, proposer_id, block_data, is_valid})
-    end)
-    {:noreply, state}
-  end
+@impl true
+def handle_cast({:pre_prepare, height, round, proposer_id, block_data, signature}) do
+
+  payload = %{
+    "flag" => "pre_prepare",
+    "height" => height,
+    "round" => round,
+    "proposer_id" => proposer_id,
+    "block_data" => block_data,
+    "signature" => signature
+  }
+
+
+  Task.start(fn ->
+    is_valid = send_to_python_service(payload, state.python_host, state.python_port)
+
+    if is_valid["status"] do
+      expected_proposer = Enum.at(state.validators, rem(height + round, length(state.validators)))
+
+      if proposer_id == expected_proposer do
+
+        # CONTROLLO SU PENDING BLOCK
+        if state.pending_block != nil do
+          # Creiamo un nuovo payload aggiornato:
+          conflict_payload =
+            payload
+            |> Map.put("flag", "pre_prepare_conflict")
+            |> Map.put("conflicting_block", state.pending_block)
+            |> Map.put("conflicting_signature", state.temporary_signature)
+
+          proof = send_to_python_service(conflict_payload, state.python_host, state.python_port)
+
+          if proof["status"] do
+            msg = {:round_change, %{
+              "flag" => "round_change",
+              "height" => height,
+              "target_round" => round + 1,
+              "validator_id" => state.node_id,
+              "conflicting_block" => state.pending_block, # Corretto: mancava "state."
+              "conflicting_signature" => state.temporary_signature,
+              "forged_block" => block_data,
+              "forged_signature" => signature,
+              validator_signature: proof["validator_signature"]
+            }}
+
+            broadcast_to_all(state.peers, msg)
+            Logger.warning("Conflitto di blocco rilevato da #{proposer_id}. Avvio ROUND_CHANGE verso il round #{round + 1}")
+          end
+
+        else
+          # ESEGUITO SOLO SE pending_block == nil
+          send(engine_pid, {:verified_pre_prepare, height, round, proposer_id, block_data, is_valid["status"]})
+        end
+
+      end
+    else
+      send(engine_pid, {:verified_pre_prepare, height, round, proposer_id, block_data, is_valid["status"]})
+
+    end
+  end)
+
+  # Questo è fondamentale: handle_cast deve finire ritornando {:noreply, state}
+  {:noreply, state}
+end
+
 
   @impl true
   def handle_info({:verified_pre_prepare, height, round, proposer_id, block_data, true}, state) do
-    # Verifica che la proposta sia per l'altezza corrente e dal vero Proposer deterministico
+    # verifica che la proposta sia per l'altezza corrente e dal vero Proposer deterministico
     expected_proposer = Enum.at(state.validators, rem(height + round, length(state.validators)))
 
+    # controllo di: altezza blockchain, round corrente e che il proposer sia quello atteso
     if height == state.current_height and round == state.current_round and proposer_id == expected_proposer do
       Logger.info("Pre-Prepare valido da #{proposer_id}. Avvio fase PREPARE.")
 
-      # invia broadcast a TUTTI che si è d'accordo
-      payload = %{"flag" => "prepare", "height" => height, "round" => round, "validator_id" => state.node_id}
+      # invia broadcast a tutti che si è d'accordo
+      payload = %{"flag" => "prepare", "height" => height, "round" => round, "validator_id" => state.node_id, "block_data" => block_data}
       signature = send_to_python_service(payload, state.python_host, state.python_port)
 
-      msg = {:prepare, height, round, state.node_id, signature}
-      broadcast_to_all(state.peers, msg)
+      case signature do
+        %{"signature" => signature} ->
+          msg = {:prepare, height, round, state.node_id, signature}
+          broadcast_to_all(state.peers, msg)
 
-      {:noreply, %{state | pending_block: block_data}}
+          # AGGIUNGE IMMEDIATAMENTE IL PROPRIO VOTO ALLO STATO LOCALE
+          new_votes = MapSet.put(state.prepare_votes, state.node_id)
+
+          # aggiorna lo stato
+          {:noreply, %{state |
+            pending_block: block_data,
+            temporary_signature: my_signature,
+            prepare_votes: new_votes # <- Stato aggiornato col proprio voto
+          }}
+
+        _ ->
+          Logger.warning("Errore nella componente python")
+          {:noreply, state}
     else
       {:noreply, state}
     end
   end
+end
   def handle_info({:verified_pre_prepare, _, _, proposer_id, _, false}, state), do: ignore_bad_sig(proposer_id, state)
 
 
   # FASE 2: PREPARE (verifica broadcast)
 
   @impl true
-  def handle_cast({:prepare, height, round, validator_id, signature}, state) do
-    engine_pid = self()
-    payload = %{"flag" => "prepare", "height" => height, "round" => round, "validator_id" => validator_id, "signature" => signature}
+  def handle_cast({:prepare, height, round, validator_id, signature}) do
+    if height == state.current_height and round == state.current_round do
+      payload = %{"flag" => "verified_prepare", "height" => height, "round" => round, "validator_id" => validator_id, "signature" => signature}
 
-    Task.start(fn ->
-      is_valid = send_to_python_service(payload, state.python_host, state.python_port)
-      send(engine_pid, {:verified_prepare, height, round, validator_id, is_valid})
-    end)
+      Task.start(fn ->
+        is_valid = send_to_python_service(payload, state.python_host, state.python_port)
+        send(engine_pid, {:verified_prepare, height, round, validator_id, is_valid["status"]})
+      end)
+    end
+
     {:noreply, state}
+  end
   end
 
   @impl true
@@ -255,18 +323,28 @@ defmodule InventoryNode.ConsensusEngine do
       new_votes = MapSet.put(state.prepare_votes, validator_id)
 
       # se raggiungiamo il Quorum (2f + 1) e non avevamo ancora committato
-      if MapSet.size(new_votes) == state.quorum do
+      if MapSet.size(new_votes) >= state.quorum do
         Logger.info("Quorum PREPARE raggiunto! Avvio fase COMMIT.")
 
         # COMMIT
         payload = %{"flag" => "commit", "height" => height, "round" => round, "validator_id" => state.node_id}
         signature = send_to_python_service(payload, state.python_host, state.python_port)
 
-        msg = {:commit, height, round, state.node_id, signature}
+
+        msg = {:commit, height, round, state.node_id, signature["signature"]}
         broadcast_to_all(state.peers, msg)
+
+        # IL NODO AGGIUNGE SUBITO IL PROPRIO VOTO DI COMMIT
+        new_commit_votes = MapSet.put(state.commit_votes, state.node_id)
+
+        {:noreply, %{state |
+          prepare_votes: new_prepare_votes,
+          commit_votes: new_commit_votes
+        }}
+      else
+        {:noreply, %{state | prepare_votes: new_votes}}
       end
 
-      {:noreply, %{state | prepare_votes: new_votes}}
     else
       {:noreply, state} # messaggio obsoleto
     end
@@ -278,13 +356,15 @@ defmodule InventoryNode.ConsensusEngine do
 
   @impl true
   def handle_cast({:commit, height, round, validator_id, signature}, state) do
+    if height == state.current_height and round == state.current_round and validator_id != state.node_id do
     engine_pid = self()
-    payload = %{"flag" => "commit", "height" => height, "round" => round, "validator_id" => validator_id, "signature" => signature}
+    payload = %{"flag" => "verified_commit", "height" => height, "round" => round, "validator_id" => validator_id, "signature" => signature}
 
     Task.start(fn ->
       is_valid = send_to_python_service(payload, state.python_host, state.python_port)
-      send(engine_pid, {:verified_commit, height, round, validator_id, is_valid})
+      send(engine_pid, {:verified_commit, height, round, validator_id, is_valid["status"]})
     end)
+  end
     {:noreply, state}
   end
 
@@ -293,7 +373,7 @@ defmodule InventoryNode.ConsensusEngine do
     if height == state.current_height and round == state.current_round do
       new_votes = MapSet.put(state.commit_votes, validator_id)
 
-      if MapSet.size(new_votes) == state.quorum do
+      if MapSet.size(new_votes) >= state.quorum do
         Logger.info("BLOCCO #{height} COMMITTATO!")
 
         # scrittura del blocco sul servizio Python (simulazione di scrittura su DB)
@@ -306,7 +386,11 @@ defmodule InventoryNode.ConsensusEngine do
         # si passa al prossimo blocco, resettando il round a 0
         new_state = %{state |
           current_height: state.current_height + 1,
-          current_round: 0
+          current_round: 0,
+          pending_block: nil,
+          temporary_signature: nil,
+          prepare_votes: MapSet.new(), # Assicurati di svuotare i set per il blocco successivo
+          commit_votes: MapSet.new()   # Svuota i set per il blocco successivo
         }
         {:noreply, start_round(new_state)}
       else
@@ -318,7 +402,10 @@ defmodule InventoryNode.ConsensusEngine do
   end
   def handle_info({:verified_commit, _, _, validator_id, false}, state), do: ignore_bad_sig(validator_id, state)
 
-  # --- Funzioni di Supporto Rete e Python ---
+
+
+
+  # Funzioni di supporto
 
   defp ignore_bad_sig(node_id, state) do
     Logger.error("Firma invalida da #{node_id}. Possibile nodo Bizantino!")
@@ -329,17 +416,33 @@ defmodule InventoryNode.ConsensusEngine do
     GenServer.cast(__MODULE__, message)
 
     data = :erlang.term_to_binary(message)
-    Enum.each(peers, fn {_peer_id, {host, port}} ->
-      send_tcp(host, port, data)
+    Enum.each(peers, fn {peer_id, {host, port}} ->
+      case Task.start(fn -> send_tcp(peer_id, host, port, data) end) do
+        {:ok, _pid} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.error("Impossibile avviare l'invio al peer #{peer_id}: #{inspect(reason)}")
+      end
     end)
+
+    :ok
   end
 
-  defp send_tcp(host, port, binary_data) do
+  defp send_tcp(peer_id, host, port, binary_data) do
     case :gen_tcp.connect(host, port, [:binary, active: false], 1000) do
       {:ok, socket} ->
-        :gen_tcp.send(socket, binary_data)
+        result = :gen_tcp.send(socket, binary_data)
         :gen_tcp.close(socket)
-      _ -> :ok
+
+        case result do
+          :ok -> :ok
+          {:error, reason} ->
+            Logger.warning("Invio del messaggio al peer #{peer_id} fallito: #{inspect(reason)}")
+        end
+
+      {:error, reason} ->
+        Logger.warning("Connessione al peer #{peer_id} fallita: #{inspect(reason)}")
     end
   end
 
@@ -375,4 +478,3 @@ defmodule InventoryNode.ConsensusEngine do
       _ -> false
     end
   end
-end

@@ -33,9 +33,9 @@ Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requi
 - JSON di forma {flag: "setup_keys_warning", from_node: from_node, pub_key: pub_key}: ricevi la chiave pubblica di un'altro nodo appena acceso e si deve registrare nel dizionario di chiavi pubbliche degli altri nodi. Deve restituire un JSON {"flag" => "setup_keys_warning", "status" => "success"}.
 
 
-- JSON di forma {flag: "prepare_block", node_id: Node.self()}: prepara un blocco in formato json di forma:
-{
-  "hash": "0x8f4b2c9a...e31d",
+- JSON di forma {flag: "prepare_block", node_id: Node.self() (string) , current_height: current_height (int)}: prepara un blocco della block chain e restituisce un json di forma:
+{"block_data":
+  {"hash": "0x8f4b2c9a...e31d",
   "header": {
     "height": 101,
     "previous_hash": "0x3a1b...99df",
@@ -44,11 +44,6 @@ Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requi
     "round": 1,
     "transactions_root": "0x7c4e...11bb",
     "state_root": "0x9d2a...55cc",
-    "commit_seals": [
-      "0xSignature_ValidatorA...",
-      "0xSignature_ValidatorC...",
-      "0xSignature_ValidatorD..."
-    ]
   },
   "transactions": [
     {
@@ -62,6 +57,8 @@ Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requi
   "tx_id": "string",
 } 
   ]
+},
+"proposer_sign": "(signature_proposer)"
 }
 
 - JSON di forma {
@@ -72,15 +69,78 @@ Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requi
       "signature" => nil
     } : Bisogna semplicemente aggiungere la firma del nodo che lo richiede e ritornare lo stesso JSON ma con la firma
 
+
+- JSON di forma {"flag" => "pre_prepare_conflict",
+ "height" => height, 
+ "round" => round, 
+ "proposer_id"=>proposer_id,
+  "block_data" => block_data, 
+  "signature" =>signature,
+  "conflicting_block"=> state.pending_block,
+"conflicting_signature" => state.temporary_signature
+  } : Dovresti verificare che 'block_data' e la sua 'signature' corrispondano a quelli del leader che la proppone 'proposer_id', lo stesso per "conflicting_block" e "conflicting_signature". Se entrambi sono firmati da 'proposer_id' e i blocchi sono diversi allora restituisci un JSON con {"status": boolean, "validator_signature": signature} con "status" = true e la firma del nodo che sta controllando su le proof (proof è "validator_id","block_data","signature","conflicting_block","conflicting_signature") se il leader ha proposto effettivamente due blocchi diversi (bizantino), false altrimenti
+
+
+DUE TIPI DI ROUND CHANGE (timeout e doppia proposta di blocchi diversi):
 - JSON di forma {
       "flag" => "verified_round_change",
       "height" => state.current_height,
       "target_round" => target_round,
       "validator_id" => state.node_id,
       "signature" => signature
-    } : in questo caso bisogna verificare la 'signature' del nodo "validator_id" con la sua chiave pubblica, ritornando un JSON con {"status": "valid"} o {"status": "invalid"}
+    } : in questo caso bisogna verificare la 'signature' del nodo "validator_id" con la sua chiave pubblica, ritornando un JSON con {"status": true} o {"status": false}
 
-- JSON di forma 
+- JSON di forma  {
+      "flag" => "verified_round_change",
+      "height" => height,
+      "target_round" => round + 1,
+      "validator_id" => state.node_id,
+      "conflicting_block" => state.pending_block, 
+      "conflicting_signature" => state.temporary_signature,
+      "forged_block" => block_data,
+      "forged_signature" => signature,
+      validator_signature: proof["validator_signature"]
+            } : Dovresti verificare che 'block_data' e la sua 'signature' corrispondano a quelli del leader che la proppone 'proposer_id', lo stesso per "conflicting_block" e "conflicting_signature". Se entrambi sono firmati da 'proposer_id' e i blocchi sono diversi allora restituisci un JSON con {"status": boolean}. Verifica anche la firma del validatore con la sua chiave pubblica sulla proof (proof è "validator_id","block_data","signature","conflicting_block","conflicting_signature")
+
+- JSON di forma {"flag" => "pre_prepare",
+ "height" => height,
+  "round" => round,
+   "proposer_id"=>proposer_id,
+    "block_data" => block_data,
+     "signature" =>signature} : verifica la signature fatta per il 'proposer_id' per il 'block_data' usando la sua chiave pubblica, restituisce un JSON {"is_valid": boolean} 
+
+
+- JSON di forma {"flag" => "prepare", 
+"height" => height,
+ "round" => round,
+  "validator_id" => state.node_id,
+   "block_data" => block_data} : firma il 'block_data' con la chiave privata del nodo che lo richiede e restituisci un JSON {"signature" : signature} 
+
+- JSON di forma {"flag" => "verified_prepare",
+                  "height" => height, 
+                  "round" => round, 
+                  "validator_id" => validator_id, 
+                  "signature" => signature} : verifica la firma 'signature' con la chiave pubblica del 'validator_id' e ritorna un JSON del tipo {"status": boolean} con 'true' se corrisponde la firma o 'false' altrimenti
+              
+- JSON di forma {"flag" => "commit", 
+                  "height" => height, 
+                  "round" => round,
+                  "validator_id" => state.node_id} : restituisci un JSON {"signature" : signature} del nodo 'validator_id'
+
+
+- JSON di forma {"flag" => "verified_commit", 
+                  "height" => height,
+                  "round" => round,
+                    "validator_id" => validator_id,
+                    "signature" => signature} : verifica la firma 'signature' con la chiave pubblica del 'validator_id' e ritorna un JSON del tipo {"status": boolean} con 'true' se corrisponde la firma o 'false' altrimenti
+
+- JSON di forma {"flag" => "write_block", 
+                  "height" => height,
+                  "block_data" => state.pending_block} : scrivi il blocco "block_data" definitivamente sulla blockchain
+
+                  
+
+  
 
 
 
