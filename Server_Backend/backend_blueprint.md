@@ -437,6 +437,28 @@ Errors:
 - 422 invalid inventory transition (negative quantity)
 - 500 internal error
 
+### 3.7 GET /chain/history
+
+Purpose:
+- Serve the chain log in bounded pages without loading the full chain into the client.
+
+Query parameters:
+- `limit`: page size from 1 to 100 (default 50).
+- `before_n_block`: optional exclusive cursor; fetches blocks with a lower block number.
+
+Blocks are returned newest-first. When `has_more` is true, use
+`next_before_n_block` as the `before_n_block` value on the next request.
+
+Response 200:
+```json
+{
+  "ok": true,
+  "blocks": [],
+  "has_more": true,
+  "next_before_n_block": 51
+}
+```
+
 ---
 
 ## 4. Data Model (SQLite)
@@ -639,7 +661,8 @@ Alignment with app blueprint:
 - Password recovery flow calls `/auth/forgot_pwd` then `/auth/reset_login_with_otp`.
 - Admin workflows call `/users/signup_new_user` and `/users/remove_user`.
 - Inventory apply action calls `/chain/add_block`.
-- Chain log screen uses `/chain/check_chain_sync` to fetch missing blocks.
+- Chain log screen uses paginated `GET /chain/history`; chain synchronization
+  continues to use `/chain/check_chain_sync`.
 - Clients poll `/notify` to receive new in-app notifications.
 
 API conventions for client consistency:
@@ -674,6 +697,7 @@ API conventions for client consistency:
 - [ ] `POST /api/v1/users/remove_user`
 - [ ] `POST /api/v1/users/change_user_pwd`
 - [ ] `POST /api/v1/chain/check_chain_sync`
+- [ ] `GET /api/v1/chain/history`
 - [ ] `POST /api/v1/chain/add_block`
 - [ ] `GET /api/v1/health/live`
 - [ ] `GET /api/v1/health/ready`

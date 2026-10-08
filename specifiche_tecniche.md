@@ -12,8 +12,6 @@ Il modulo `InventoryNode.Router` analizzato funge da dispatcher, inoltrando le r
 
 Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requisiti del progetto (FR-1, FR-2, FR-3), quando un client (nodo operatore) invia una transazione al backend (tramite il `ClientListener` che si trova in ascolto sulla porta 5000 del host base), il payload JSON deve rispettare la seguente struttura:
 
-```json per le transazioni
-
 
 ## API Python deve gestire i seguenti messaggi:
 
@@ -136,7 +134,7 @@ DUE TIPI DI ROUND CHANGE (timeout e doppia proposta di blocchi diversi):
 
 - JSON di forma {"flag" => "write_block", 
                   "height" => height,
-                  "block_data" => state.pending_block} : scrivi il blocco "block_data" definitivamente sulla blockchain
+                  "block_data" => state.pending_block} : scrivi il blocco "block_data" definitivamente sulla blockchain e restituisci un JSON {"status": boolean} con 'true' se il blocco è stato scritto correttamente o 'false' altrimenti
 
                   
 

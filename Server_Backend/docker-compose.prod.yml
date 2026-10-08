@@ -3,11 +3,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    # In production, TLS is terminated by host NGINX.
     env_file:
       - .env
     environment:
-      - TLS_REQUIRED=false
       - API_HOST=0.0.0.0
       - API_PORT=8000
     ports:

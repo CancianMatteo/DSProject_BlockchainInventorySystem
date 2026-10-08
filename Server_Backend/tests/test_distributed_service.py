@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
+from app.api.routes_chain import get_chain_history
 from app.db.models import PendingTransaction
+from app.db.repositories import insert_block
 from app.db.session import Base
 from app.services.cache_service import inventory_cache
 from app.services.distributed_service import (
@@ -209,3 +211,39 @@ def test_sync_import_accepts_only_a_certified_block(db, validator_keys, monkeypa
     finally:
         Base.metadata.drop_all(target_engine)
         target_engine.dispose()
+
+
+def test_chain_history_returns_descending_cursor_pages(db):
+    for n_block in range(1, 6):
+        insert_block(
+            db,
+            n_block=n_block,
+            prev_block_hash=f"hash-{n_block - 1}" if n_block > 1 else None,
+            block_hash=f"hash-{n_block}",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            changes={"item-1": n_block},
+            author_email="operator@example.test",
+            author_sign=None,
+            server_sign="signature",
+        )
+
+    first_page = get_chain_history(db=db, limit=2)
+    second_page = get_chain_history(
+        db=db,
+        limit=2,
+        before_n_block=first_page["next_before_n_block"],
+    )
+    last_page = get_chain_history(
+        db=db,
+        limit=2,
+        before_n_block=second_page["next_before_n_block"],
+    )
+
+    assert [block["n_block"] for block in first_page["blocks"]] == [5, 4]
+    assert first_page["has_more"] is True
+    assert first_page["next_before_n_block"] == 4
+    assert [block["n_block"] for block in second_page["blocks"]] == [3, 2]
+    assert second_page["has_more"] is True
+    assert [block["n_block"] for block in last_page["blocks"]] == [1]
+    assert last_page["has_more"] is False
+    assert last_page["next_before_n_block"] is None

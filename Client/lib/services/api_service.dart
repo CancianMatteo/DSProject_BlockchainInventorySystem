@@ -319,6 +319,46 @@ class ApiService {
     }
   }
 
+  Future<ApiResponse<Map<String, dynamic>>> getChainHistory({
+    int limit = 50,
+    int? beforeNBlock,
+  }) async {
+    try {
+      final uri = _buildUri('/api/v1/chain/history').replace(
+        queryParameters: {
+          'limit': '$limit',
+          if (beforeNBlock != null) 'before_n_block': '$beforeNBlock',
+        },
+      );
+      final response = await _httpClient.get(uri, headers: _headers);
+
+      Map<String, dynamic> body = {};
+      try {
+        body = jsonDecode(response.body) as Map<String, dynamic>;
+      } catch (_) {
+        body = {};
+      }
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return ApiResponse.fromJson(
+          body,
+          (data) => (data as Map).cast<String, dynamic>(),
+        );
+      }
+
+      return ApiResponse.error(
+        body['error']?['message']?.toString() ??
+            'Errore del server: ${response.statusCode}',
+      );
+    } on SocketException {
+      return ApiResponse.error(
+        'Server blockchain non raggiungibile al $_baseUrl',
+      );
+    } catch (e) {
+      return ApiResponse.error('Si è verificato un errore imprevisto: $e');
+    }
+  }
+
   Future<ApiResponse<Map<String, dynamic>>> addBlock(
     String sessionToken,
     String prevBlockHash,

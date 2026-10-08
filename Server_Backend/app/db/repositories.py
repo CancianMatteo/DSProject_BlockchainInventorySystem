@@ -117,6 +117,19 @@ def get_blocks_after_n(db: Session, n_block: int) -> list[ChainBlock]:
     return list(db.scalars(stmt))
 
 
+def get_recent_blocks(
+    db: Session,
+    *,
+    limit: int,
+    before_n_block: int | None = None,
+) -> list[ChainBlock]:
+    stmt = select(ChainBlock)
+    if before_n_block is not None:
+        stmt = stmt.where(ChainBlock.n_block < before_n_block)
+    stmt = stmt.order_by(ChainBlock.n_block.desc()).limit(limit)
+    return list(db.scalars(stmt))
+
+
 def insert_block(
     db: Session,
     *,

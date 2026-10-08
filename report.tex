@@ -159,7 +159,7 @@ In this chapter, we outline the functional and non-functional requirements for t
     All client-to-node and node-to-node communications must be encrypted securely. Transactions must be signed using quantum-resistant algorithms. Blocks are cryptographically linked using SHA-256 hash digests.
 
     \item[\textbf{NFR-2: Availability \& Fault Tolerance}]
-    The consensus algorithm must tolerate up to $f$ failing or Byzantine nodes in a system of $n$ validator nodes, where $n \ge 3f + 1$ for BFT schemes, or $n \ge 2f + 1$ for crash fault tolerant (CFT) variants under PoA.
+    For Byzantine fault tolerance, the validator configuration must satisfy $n \ge 3f + 1$. This project configures $N=4$ validators and assumes at most $f=1$ faulty validator. A block requires a quorum of $2f+1=3$ distinct validator signatures; progress therefore requires at least $N/2+1=3$ healthy validators and an available proposer for the current round.
 
     \item[\textbf{NFR-3: Consistency \& Finality}]
     The distributed ledger must deliver deterministic block finality (zero fork probability once a block is confirmed by a majority of validators), ensuring immediate consistency across all warehouse locations.
@@ -295,17 +295,62 @@ To manage implementation risk, development is divided into three incremental tie
     \end{itemize}
 \end{description}
 
-% ==============================================================================
-% REMAINING CHAPTER STUBS (FOR FUTURE IMPLEMENTATION)
-% ==============================================================================
+
+
 \chapter{Implementation}\label{ch:implementation}
 \textit{[Implementation details regarding platform selection, specific data structures, middleware bindings, and codebase organization will be detailed here in future revisions.]}
+
+
 
 \chapter{Validation}\label{ch:validation}
 \textit{[Performance benchmarks, TPS throughput graphs, fault tolerance simulation results, and UI screenshots validating the requirements of Chapter~\ref{ch:analysis} will be presented here.]}
 
+
+
 \chapter{Conclusions}\label{ch:conclusions}
-\textit{[Summary of achieved milestones, comparison against original objectives, and proposed future work.]}
+\section{Summary and Fault-Tolerance Assumptions}
+The design uses four permissioned validator nodes and accepts a block only
+when it has signatures from at least three distinct validators. Thus, the
+system requires at least $N/2+1=3$ healthy validators to make progress. With
+$N=4$, this operating assumption permits at most one validator to be
+unavailable or Byzantine at a time. The proposer may count as one of the three
+validators, provided it independently validates the proposal and signs the
+same block hash.
+
+The one-vote-per-height rule is central to the current safety model: an honest
+validator signs at most one block hash for a given block height. Any two
+three-validator quorums in a four-validator system intersect in at least two
+validators. With at most one Byzantine validator, their intersection contains
+at least one honest validator, which cannot have signed conflicting blocks at
+that height. Therefore two conflicting blocks cannot both obtain certificates
+under the stated fault assumption.
+
+This quorum argument concerns safety, not availability by itself. The current
+implementation selects a proposer deterministically for each height and only
+accepts proposals from that proposer. If that proposer is the unavailable or
+faulty validator and does not produce a valid proposal, the remaining three
+healthy validators do not currently take over automatically; pending
+transactions can remain uncommitted. The implementation also rejects a
+validator's second vote for a different block at the same height.
+
+
+\section{Future Improvements}
+A future consensus improvement could support repeated voting at one block
+height across multiple rounds, allowing a later proposer to try after an
+earlier proposer is silent or faulty. This must not simply remove the
+one-vote-per-height restriction: validators need a formally specified
+round-change and locking protocol, including signed evidence of prior votes
+and rules requiring later rounds to preserve any block on which a quorum has
+already locked. Without these safeguards, allowing validators to vote again
+could permit conflicting certificates and forks. The protocol should be
+specified and tested under the same four-node, at-most-one-fault assumption
+before this capability is added.
+
+Other future work includes testing proposer timeouts and recovery, validating
+certificate propagation under message loss and reordering, and binding
+operator public keys to authenticated BIS accounts.
+
+
 
 \appendix
 \chapter{Source Code and Setup Instructions}\label{ch:appendix}

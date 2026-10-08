@@ -1,11 +1,33 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.schemas import AddBlockRequest, CheckChainSyncRequest
+from app.db import repositories
 from app.db.session import get_db
 from app.services import chain_service, sync_service
 
 router = APIRouter(prefix="/chain", tags=["chain"])
+
+
+@router.get("/history")
+def get_chain_history(
+    limit: int = Query(default=50, ge=1, le=100),
+    before_n_block: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+):
+    rows = repositories.get_recent_blocks(
+        db,
+        limit=limit + 1,
+        before_n_block=before_n_block,
+    )
+    has_more = len(rows) > limit
+    blocks = rows[:limit]
+    return {
+        "ok": True,
+        "blocks": [sync_service.serialize_block(block) for block in blocks],
+        "has_more": has_more,
+        "next_before_n_block": blocks[-1].n_block if has_more else None,
+    }
 
 
 @router.post("/check_chain_sync")
