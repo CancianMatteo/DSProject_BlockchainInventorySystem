@@ -378,10 +378,20 @@ end
 
         # scrittura del blocco sul servizio Python (simulazione di scrittura su DB)
         payload = %{"flag" => "write_block", "height" => height, "block_data" => state.pending_block}
-        case send_to_python_service(payload, state.python_host, state.python_port) do
-          true -> Logger.info("Blocco #{height} scritto correttamente sul servizio Python.")
-          false -> Logger.error("Errore nella scrittura del blocco #{height} sul servizio Python.")
-        end
+        case Task.start(fn ->
+        result = send_to_python_service(payload, state.python_host, state.python_port)
+
+        case result do
+         %{"status" => true} ->
+           Logger.info("Blocco #{height} scritto correttamente sul servizio Python.")
+
+         %{"status" => false} ->
+           Logger.error("Errore nella scrittura del blocco #{height} sul servizio Python.")
+
+         other ->
+           Logger.error("Risposta inattesa scrivendo il blocco #{height}: #{inspect(other)}")
+       end
+     end)
 
         # si passa al prossimo blocco, resettando il round a 0
         new_state = %{state |
