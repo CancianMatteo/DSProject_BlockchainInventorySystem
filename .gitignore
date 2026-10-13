@@ -10,3 +10,9 @@
 __pycache__
 .idx
 .dart_tool
+.env
+*.db
+*.sqlite3
+.vscode/
+.DS_Store
+#./specifiche_tecniche.md

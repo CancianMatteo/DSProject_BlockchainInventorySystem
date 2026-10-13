@@ -1,4 +1,4 @@
-version: '3.8'
+
 
 # reti separate per ogni nodo
 networks:
@@ -42,7 +42,7 @@ services:
           - python_validator
 
   node_a:
-    build: ./Server_Interface/Server_Interface
+    build: ./Server_Interface
     environment:
       - NODE_ID=node_a
       - BYZANTINE_MODE=false
@@ -78,7 +78,7 @@ services:
           - python_validator
 
   node_b:
-    build: ./Server_Interface/Server_Interface
+    build: ./Server_Interface
     environment:
       - NODE_ID=node_b
       - BYZANTINE_MODE=false
@@ -114,7 +114,7 @@ services:
           - python_validator
 
   node_c:
-    build: ./Server_Interface/Server_Interface
+    build: ./Server_Interface
     environment:
       - NODE_ID=node_c
       - BYZANTINE_MODE=false
@@ -150,7 +150,7 @@ services:
           - python_validator
 
   node_d_byzantine:
-    build: ./Server_Interface/Server_Interface
+    build: ./Server_Interface
     environment:
       - NODE_ID=node_d_byzantine
       - BYZANTINE_MODE=true 

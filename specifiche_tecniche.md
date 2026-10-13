@@ -137,6 +137,7 @@ DUE TIPI DI ROUND CHANGE (timeout e doppia proposta di blocchi diversi):
                   "block_data" => state.pending_block} : scrivi il blocco "block_data" definitivamente sulla blockchain e restituisci un JSON {"status": boolean} con 'true' se il blocco è stato scritto correttamente o 'false' altrimenti
 
                   
+- Ho fatto il merging del docker compose impostando i nodi python come erano impostati nel docker compose dentro Server_backend. è da modificare probabilmente la porta con cui il client comunicherà con il Server_backend (scegli una tra 5001,5002,5003,5004)
 
   
 
