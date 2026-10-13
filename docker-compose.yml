@@ -27,17 +27,22 @@ services:
   python_validator_a:
     build: 
       context: ./Server_Backend
+    container_name: bis_api_server_a # Nome univoco
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    env_file:
+      - ./Server_Backend/.env 
     volumes:
-      - bis_data_a:/data
+      - bis_data_a:/data # volume univoco per il nodo A
     ports:
-      - "5001:8000" # il client si connette a localhost:5001
+      - "5001:8000" # Porta host univoca
+    restart: unless-stopped
     networks:
       node_a_internal:
         aliases:
           - python_validator
 
   node_a:
-    build: .
+    build: ./Server_Interface/Server_Interface
     environment:
       - NODE_ID=node_a
       - BYZANTINE_MODE=false
@@ -46,6 +51,7 @@ services:
       - PEERS=node_b:4000,node_c:4000,node_d_byzantine:4000
     depends_on:
       - python_validator_a
+    restart: unless-stopped
     networks:
       - node_a_internal
       - cluster_network
@@ -57,17 +63,22 @@ services:
   python_validator_b:
     build: 
       context: ./Server_Backend
+    container_name: bis_api_server_b # Nome univoco
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    env_file:
+      - ./Server_Backend/.env 
     volumes:
-      - bis_data_b:/data
+      - bis_data_b:/data # volume univoco per il nodo B
     ports:
-      - "5002:8000"
+      - "5002:8000" # Porta host univoca
+    restart: unless-stopped
     networks:
       node_b_internal:
         aliases:
           - python_validator
 
   node_b:
-    build: .
+    build: ./Server_Interface/Server_Interface
     environment:
       - NODE_ID=node_b
       - BYZANTINE_MODE=false
@@ -76,6 +87,7 @@ services:
       - PEERS=node_a:4000,node_c:4000,node_d_byzantine:4000
     depends_on:
       - python_validator_b
+    restart: unless-stopped
     networks:
       - node_b_internal
       - cluster_network
@@ -87,17 +99,22 @@ services:
   python_validator_c:
     build: 
       context: ./Server_Backend
+    container_name: bis_api_server_c # Nome univoco
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    env_file:
+      - ./Server_Backend/.env 
     volumes:
-      - bis_data_c:/data
+      - bis_data_c:/data # volume univoco per il nodo C
     ports:
-      - "5003:8000"
+      - "5003:8000" # Porta host univoca
+    restart: unless-stopped
     networks:
       node_c_internal:
         aliases:
           - python_validator
 
   node_c:
-    build: .
+    build: ./Server_Interface/Server_Interface
     environment:
       - NODE_ID=node_c
       - BYZANTINE_MODE=false
@@ -106,6 +123,7 @@ services:
       - PEERS=node_a:4000,node_b:4000,node_d_byzantine:4000
     depends_on:
       - python_validator_c
+    restart: unless-stopped
     networks:
       - node_c_internal
       - cluster_network
@@ -117,17 +135,22 @@ services:
   python_validator_d:
     build: 
       context: ./Server_Backend
+    container_name: bis_api_server_d # Nome univoco
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    env_file:
+      - ./Server_Backend/.env 
     volumes:
-      - bis_data_d:/data
+      - bis_data_d:/data # volume univoco per il nodo D
     ports:
-      - "5004:8000"
+      - "5004:8000" # Porta host univoca
+    restart: unless-stopped
     networks:
       node_d_internal:
         aliases:
           - python_validator
 
   node_d_byzantine:
-    build: .
+    build: ./Server_Interface/Server_Interface
     environment:
       - NODE_ID=node_d_byzantine
       - BYZANTINE_MODE=true 
@@ -136,6 +159,7 @@ services:
       - PEERS=node_a:4000,node_b:4000,node_c:4000
     depends_on:
       - python_validator_d
+    restart: unless-stopped
     networks:
       - node_d_internal
       - cluster_network
