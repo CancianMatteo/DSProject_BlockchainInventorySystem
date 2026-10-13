@@ -1,43 +1,49 @@
 version: '3.8'
 
-# definizione delle reti isolate e di quella pubblica (imita i diversi nodi in diverse macchine)
+# reti separate per ogni nodo
 networks:
   cluster_network:
     driver: bridge
   node_a_internal:
-    driver: bridge
     internal: true
   node_b_internal:
-    driver: bridge
     internal: true
   node_c_internal:
-    driver: bridge
     internal: true
   node_d_internal:
-    driver: bridge
     internal: true
 
+# volumi separati per evitare conflitti nel DB SQLite
+volumes:
+  bis_data_a:
+  bis_data_b:
+  bis_data_c:
+  bis_data_d:
+
 services:
-  
-  # NODO A
+ 
+ # NODO A (Onesto)
+
   python_validator_a:
     build: 
-      context: ./python_service
+      context: ./Server_Backend
+    volumes:
+      - bis_data_a:/data
+    ports:
+      - "5001:8000" # il client si connette a localhost:5001
     networks:
       node_a_internal:
         aliases:
-          - python_validator # elixir lo chiamerà con questo nome
+          - python_validator
 
   node_a:
     build: .
     environment:
       - NODE_ID=node_a
+      - BYZANTINE_MODE=false
       - PYTHON_HOST=python_validator 
-      - PYTHON_PORT=5000
-      - MY_PORT=4001
-      - PEERS=node_b:4002,node_c:4003,node_d:4004
-    ports:
-      - "4001:4001"
+      - PYTHON_PORT=8000 
+      - PEERS=node_b:4000,node_c:4000,node_d_byzantine:4000
     depends_on:
       - python_validator_a
     networks:
@@ -45,10 +51,16 @@ services:
       - cluster_network
 
 
-  # NODO B
+ 
+  # NODO B (Onesto)
+
   python_validator_b:
     build: 
-      context: ./python_service
+      context: ./Server_Backend
+    volumes:
+      - bis_data_b:/data
+    ports:
+      - "5002:8000"
     networks:
       node_b_internal:
         aliases:
@@ -58,12 +70,10 @@ services:
     build: .
     environment:
       - NODE_ID=node_b
+      - BYZANTINE_MODE=false
       - PYTHON_HOST=python_validator
-      - PYTHON_PORT=5000 
-      - MY_PORT=4002
-      - PEERS=node_a:4001,node_c:4003,node_d:4004
-    ports:
-      - "4002:4002"
+      - PYTHON_PORT=8000 
+      - PEERS=node_a:4000,node_c:4000,node_d_byzantine:4000
     depends_on:
       - python_validator_b
     networks:
@@ -71,10 +81,16 @@ services:
       - cluster_network
 
 
-  # NODO C
+
+  # NODO C (Onesto)
+  
   python_validator_c:
     build: 
-      context: ./python_service
+      context: ./Server_Backend
+    volumes:
+      - bis_data_c:/data
+    ports:
+      - "5003:8000"
     networks:
       node_c_internal:
         aliases:
@@ -84,37 +100,40 @@ services:
     build: .
     environment:
       - NODE_ID=node_c
+      - BYZANTINE_MODE=false
       - PYTHON_HOST=python_validator
-      - PYTHON_PORT=5000
-      - MY_PORT=4003
-      - PEERS=node_a:4001,node_b:4002,node_d:4004
-    ports:
-      - "4003:4003"
+      - PYTHON_PORT=8000
+      - PEERS=node_a:4000,node_b:4000,node_d_byzantine:4000
     depends_on:
       - python_validator_c
     networks:
       - node_c_internal
       - cluster_network
 
-  # NODO D
+
+
+  # NODO D (BIZANTINO)
+ 
   python_validator_d:
     build: 
-      context: ./python_service
+      context: ./Server_Backend
+    volumes:
+      - bis_data_d:/data
+    ports:
+      - "5004:8000"
     networks:
       node_d_internal:
         aliases:
           - python_validator
 
-  node_d:
+  node_d_byzantine:
     build: .
     environment:
-      - NODE_ID=node_d
+      - NODE_ID=node_d_byzantine
+      - BYZANTINE_MODE=true 
       - PYTHON_HOST=python_validator
-      - PYTHON_PORT=5000
-      - MY_PORT=4004
-      - PEERS=node_a:4001,node_b:4002,node_c:4003
-    ports:
-      - "4004:4004"
+      - PYTHON_PORT=8000
+      - PEERS=node_a:4000,node_b:4000,node_c:4000
     depends_on:
       - python_validator_d
     networks:

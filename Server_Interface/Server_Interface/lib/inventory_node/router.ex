@@ -45,10 +45,10 @@ defmodule InventoryNode.Router do
     {:setup_keys} ->
       IO.puts("Setup delle chiavi pubbliche e private per la crittografia")
       case send_to_python_service(%{flag: "setup_keys", from_node: Node.self()}, python_host, python_port) do
-        {:ok, %{"flag" => "setup_keys", "pub_key" => pub_key}} ->
+        %{"flag" => "setup_keys", "pub_key" => pub_key} ->
             broadcast_to_peers(peers, {:setup_keys_warning, Node.self(), pub_key})
 
-        {:error, %{"status" => "error", "reason" => reason}} ->
+        %{"flag" => "error", "reason" => reason} ->
               {:error, reason}
 
             _ ->
@@ -59,10 +59,10 @@ defmodule InventoryNode.Router do
     {:setup_keys_warning, from_node, pub_key} ->
       IO.puts("Ricevuto avviso di setup chiavi da #{inspect(from_node)}")
       case send_to_python_service(%{flag: "setup_keys_warning", from_node: from_node, pub_key: pub_key}, python_host, python_port) do
-        {:ok, %{"flag" => "setup_keys_warning", "status" => "success"}} ->
+        %{"flag" => "setup_keys_warning", "status" => "success"} ->
           IO.puts("Chiave pubblica del nodo #{inspect(from_node)} registrata correttamente.")
 
-        {:error, %{"status" => "error", "reason" => reason}} ->
+        %{"flag" => "error", "reason" => reason} ->
               {:error, reason}
 
             _ ->
