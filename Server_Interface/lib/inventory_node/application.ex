@@ -4,8 +4,14 @@ defmodule InventoryNode.Application do
 
   @impl true
   def start(_type, _args) do
-    my_id = System.get_env("NODE_ID") || "node_A"
-
+    my_id = System.get_env("NODE_ID")
+    is_byzantine = System.get_env("BYZANTINE_MODE") == "true"
+  engine_module =
+      if is_byzantine do
+        InventoryNode.ByzantineEngine
+      else
+        InventoryNode.ConsensusEngine
+      end
 
   cluster_map = File.read!("cluster.json")
     |> Jason.decode!()
@@ -13,11 +19,10 @@ defmodule InventoryNode.Application do
   # Rimuovi te stesso dalla lista dei peer da contattare
   peers = Map.delete(cluster_map, my_id)
     children = [
-      # Starts a worker by calling: InventoryNode.Worker.start_link(arg)
+
       # {InventoryNode.Worker, arg}
-      InventoryNode.Mempool,
-      InventoryNode.ConsensusEngine,
-      # Ascolta i client esterni (Java, Web) in JSON
+      engine_module,
+      # Ascolta la componente Python e messaggi ritrasmessi dal cliente in JSON
      {Server_Interface.ClientListener, 8000},
 
       # Ascolta gli altri nodi Elixir in Erlang Binary

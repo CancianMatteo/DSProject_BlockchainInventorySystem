@@ -70,18 +70,6 @@ defmodule InventoryNode.Router do
         end
 
 
-    #     # NEW BLOCK REQUEST OPERATION
-    # %{"flag" => "new_block_req", "block_data" => block_data, "signature" => signature} ->
-    #   IO.puts("Ricevuta richiesta di nuovo blocco: #{inspect(block_data)}")
-    #   case send_to_python_service(%{flag: "new_block_req", block_data: block_data}, python_host, python_port) do
-    #     {:ok, response} ->
-    #       IO.puts("Risposta dal servizio Python: #{inspect(response)}")
-    #       response
-
-    #     {:error, reason} ->
-    #       IO.puts("Errore dal servizio Python: #{inspect(reason)}")
-    #     end
-
 
 # ROUND CHANGE OPERATION
     {:round_change, payload} ->

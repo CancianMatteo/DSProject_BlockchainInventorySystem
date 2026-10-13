@@ -21,5 +21,6 @@ COPY . .
 RUN mix compile
 
 EXPOSE 4000
+EXPOSE 8000
 
 CMD ["mix", "run", "--no-halt"]
