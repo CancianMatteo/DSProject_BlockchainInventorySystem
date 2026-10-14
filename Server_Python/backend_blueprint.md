@@ -586,14 +586,14 @@ Operational safeguards:
 ## 8. Docker Deployment Blueprint
 
 Container behavior:
-- Single service exposing API on port `8000` (proxied by NGINX from host port `2900`).
+- Single service exposing API on port `5000`.
 - SQLite DB persisted through mounted volume.
 - Environment-driven configuration.
 
 Environment variables:
 - `APP_ENV=production`
 - `API_HOST=0.0.0.0`
-- `API_PORT=8000`
+- `API_PORT=5000`
 - `JWT_SECRET=...`
 - `SERVER_SIGN_PRIVATE_KEY=...`
 - `DB_PATH=/data/bis.db`
@@ -601,7 +601,7 @@ Environment variables:
 - `SECURITY_ALERT_EMAIL`
 
 Runtime command:
-- `uvicorn app.main:app --host 0.0.0.0 --port 8000` (TLS disabled; NGINX terminates TLS)
+- `uvicorn app.main:app --host 0.0.0.0 --port 5000`
 
 Health endpoints:
 - `GET /health/live`
