@@ -1,4 +1,4 @@
-defmodule Server_Interface.ClusterListener do
+defmodule InventoryNode.ClusterListener do
   use Task
   require Logger
 

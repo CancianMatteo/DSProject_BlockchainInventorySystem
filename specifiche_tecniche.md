@@ -10,7 +10,7 @@ Il modulo `InventoryNode.Router` analizzato funge da dispatcher, inoltrando le r
 
 ## Struttura del Payload JSON per le Transazioni
 
-Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requisiti del progetto (FR-1, FR-2, FR-3), quando un client (nodo operatore) invia una transazione al backend (tramite il `ClientListener` che si trova in ascolto sulla porta 5000 del host base), il payload JSON deve rispettare la seguente struttura:
+Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requisiti del progetto (FR-1, FR-2, FR-3), quando un client (nodo operatore) invia una transazione al backend python del nodo x (in ascolto sulla porta 5000, mappata sulla 500x), il payload JSON deve rispettare la seguente struttura:
 
 
 ## API Python deve gestire i seguenti messaggi:
@@ -136,8 +136,6 @@ DUE TIPI DI ROUND CHANGE (timeout e doppia proposta di blocchi diversi):
                   "height" => height,
                   "block_data" => state.pending_block} : scrivi il blocco "block_data" definitivamente sulla blockchain e restituisci un JSON {"status": boolean} con 'true' se il blocco è stato scritto correttamente o 'false' altrimenti
 
-                  
-- Ho fatto il merging del docker compose impostando i nodi python come erano impostati nel docker compose dentro Server_backend. è da modificare probabilmente la porta con cui il client comunicherà con il Server_backend (scegli una tra 5001,5002,5003,5004)
 
   
 

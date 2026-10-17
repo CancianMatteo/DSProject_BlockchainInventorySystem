@@ -1,12 +1,9 @@
-defmodule InventoryNode.Router do
-
-
+defmodule InventoryNode.Router
 
   def handle_payload(payload) do
     python_host = System.get_env("PYTHON_HOST") |> String.to_charlist()
     python_port = System.get_env("PYTHON_PORT") |> String.to_integer()
     peers = parse_peers(System.get_env("PEERS"))
-
 
     case payload do
 
@@ -23,7 +20,7 @@ defmodule InventoryNode.Router do
     } ->
         IO.puts("richiesta di transazione: #{quantity} unità dell'oggetto #{item_id} nel magazzino #{location}")
         # logica da gestire in mempool python
-        transaction =send_to_python_service(%{
+        transaction = send_to_python_service(%{
           "flag" => "transaction",
           "from_node" => from_node,
           "tx_type" => tx_type,
@@ -34,49 +31,59 @@ defmodule InventoryNode.Router do
           "tx_id" => tx_id
         }, python_host, python_port)
 
-        if transaction["from_node"] not in Map.keys(peers) do
-          transaction = Map.put(transaction, "from_node", Node.self())
-          broadcast_to_peers(peers, transaction)
-        end
+        case transaction do
+          {:ok, tx} ->
+            if tx["from_node"] not in Map.keys(peers) do
+              tx2 = Map.put(tx, "from_node", Node.self())
+              broadcast_to_peers(peers, tx2)
+            end
 
+          {:error, reason} ->
+            Logger.error("Invio transazione a Python fallito: #{inspect(reason)}")
+        end
 
 
        # KEYS SETUP OPERATION
     {:setup_keys} ->
       IO.puts("Setup delle chiavi pubbliche e private per la crittografia")
       case send_to_python_service(%{flag: "setup_keys", from_node: Node.self()}, python_host, python_port) do
-        %{"flag" => "setup_keys", "pub_key" => pub_key} ->
+        {:ok, %{"flag" => "setup_keys", "pub_key" => pub_key}} ->
             broadcast_to_peers(peers, {:setup_keys_warning, Node.self(), pub_key})
 
-        %{"flag" => "error", "reason" => reason} ->
+        {:ok, %{"flag" => "error", "reason" => reason}} ->
               {:error, reason}
 
-            _ ->
+        {:ok, _} ->
               {:error, "Risposta Python malformata"}
-        end
+
+        {:error, reason} ->
+              {:error, reason}
+      end
 
         # KEYS SETUP WARNING OPERATION
     {:setup_keys_warning, from_node, pub_key} ->
       IO.puts("Ricevuto avviso di setup chiavi da #{inspect(from_node)}")
       case send_to_python_service(%{flag: "setup_keys_warning", from_node: from_node, pub_key: pub_key}, python_host, python_port) do
-        %{"flag" => "setup_keys_warning", "status" => "success"} ->
+        {:ok, %{"flag" => "setup_keys_warning", "status" => "success"}} ->
           IO.puts("Chiave pubblica del nodo #{inspect(from_node)} registrata correttamente.")
 
-        %{"flag" => "error", "reason" => reason} ->
+        {:ok, %{"flag" => "error", "reason" => reason}} ->
               {:error, reason}
 
-            _ ->
+        {:ok, _} ->
               {:error, "Risposta Python malformata"}
-        end
+
+        {:error, reason} ->
+              {:error, reason}
+      end
 
 
-
-# ROUND CHANGE OPERATION
+     # ROUND CHANGE OPERATION
     {:round_change, payload} ->
       InventoryNode.ConsensusEngine.handle_cast({:round_change, payload})
 
 
-# CONSENSUS OPERATIONS
+    # CONSENSUS OPERATIONS
     {:pre_prepare, height, round, block_data_and_signatures} ->
       InventoryNode.ConsensusEngine.handle_cast({:pre_prepare, height, round, block_data_and_signatures})
 
@@ -90,43 +97,19 @@ defmodule InventoryNode.Router do
 
 
 
-
-
-
-  #CATCH ALL
- {_, _} ->
-    IO.puts("Payload non riconosciuto: #{inspect(payload)}")
-  end
-
-end
+   #CATCH ALL
+  {_, _} ->
+     IO.puts("Payload non riconosciuto: #{inspect(payload)}")
+   end
+ end
 
   # Funzioni di supporto
-
- defp send_to_python_service(payload, py_host, py_port) do
-    case :gen_tcp.connect(py_host, py_port, [:binary, active: false], 2000) do
-      {:ok, socket} ->
-        :gen_tcp.send(socket, Jason.encode!(payload))
-        result = case :gen_tcp.recv(socket, 0, 2000) do
-          {:ok, response_json} ->
-            case Jason.decode(response_json) do
-              {:ok, parsed_response} -> parsed_response
-              {:error, reason} ->
-                Logger.error("Errore nel parsing della risposta JSON dal servizio Python: #{inspect(reason)}")
-                false
-            end
-          {:error, reason} ->
-            Logger.error("Errore di lettura dal servizio Python: #{inspect(reason)}")
-            false
-        end
-        :gen_tcp.close(socket)
-        result
-      _ -> false
-    end
+  defp send_to_python_service(payload, py_host, py_port) do
+    InventoryNode.PythonClient.call(payload, py_host, py_port)
   end
 
 
-
- defp broadcast_to_all(peers, message) do
+  defp broadcast_to_all(peers, message) do
     GenServer.cast(__MODULE__, message)
 
     data = :erlang.term_to_binary(message)
