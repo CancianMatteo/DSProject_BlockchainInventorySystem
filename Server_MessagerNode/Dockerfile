@@ -12,7 +12,7 @@ RUN mix local.hex --force && \
     mix local.rebar --force
 
 
-COPY mix.exs mix.lock ./
+COPY mix.exs ./
 RUN mix deps.get
 RUN mix deps.compile
 

@@ -1,0 +1,97 @@
+from typing import Any
+
+from fastapi import APIRouter, Body, Depends
+from sqlalchemy.orm import Session
+
+from app.core.exceptions import AppError
+from app.db.session import get_db
+from app.services import distributed_service
+
+router = APIRouter(tags=["python"])
+
+
+@router.post("/python_call")
+def python_call(
+    payload: dict[str, Any] = Body(...),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Endpoint interno usato dal motore di consenso Elixir
+    (InventoryNode.PythonClient): il campo "flag" seleziona l'operazione.
+
+    Ogni handler restituisce esattamente la struttura che il lato Elixir si
+    aspetta (vedi InventoryNode.ConsensusEngine e InventoryNode.Router).
+    """
+    flag = payload.get("flag")
+
+    # --- Scambio delle chiavi dei nodi (all'avvio del cluster) ---
+    if flag == "setup_keys":
+        return {"flag": "setup_keys", "pub_key": distributed_service.local_public_key()}
+
+    if flag == "setup_keys_warning":
+        distributed_service.register_peer_public_key(
+            payload.get("from_node"), payload.get("pub_key")
+        )
+        return {"flag": "setup_keys_warning", "status": "success"}
+
+    # --- Transazioni (mempool) ---
+    if flag == "transaction":
+        result = distributed_service.submit_transaction(db, payload)
+        return {
+            **payload,
+            "status": result["status"],
+            "duplicate": result["duplicate"],
+        }
+
+    # --- Proposta del leader (PRE-PREPARE) ---
+    if flag == "prepare_block":
+        round_number = payload.get("round")
+        if (
+            isinstance(round_number, bool)
+            or not isinstance(round_number, int)
+            or round_number < 0
+        ):
+            raise AppError(
+                "INVALID_ROUND",
+                "prepare_block round must be a non-negative integer",
+                status_code=400,
+            )
+        return distributed_service.prepare_proposal(db, round_number)
+
+    if flag == "pre_prepare":
+        return {"status": distributed_service.verify_pre_prepare(payload)}
+
+    if flag == "pre_prepare_conflict":
+        proof = distributed_service.verify_pre_prepare_conflict(payload)
+        if proof is None:
+            return {"status": False}
+        return {"status": True, "validator_signature": proof["validator_signature"]}
+
+    # --- Voti PREPARE / COMMIT ---
+    if flag == "prepare":
+        return distributed_service.sign_vote("prepare", payload)
+
+    if flag == "verified_prepare":
+        return {"status": distributed_service.verify_vote("prepare", payload)}
+
+    if flag == "commit":
+        return distributed_service.sign_vote("commit", payload)
+
+    if flag == "verified_commit":
+        return {"status": distributed_service.verify_vote("commit", payload)}
+
+    # --- ROUND CHANGE ---
+    if flag == "round_change":
+        return distributed_service.sign_round_change(payload)
+
+    if flag == "verified_round_change":
+        return {"status": distributed_service.verify_round_change(payload)}
+
+    # --- Scrittura del blocco ratificato ---
+    if flag == "write_block":
+        return distributed_service.write_committed_block(db, payload.get("block_data"))
+
+    raise AppError(
+        "UNKNOWN_FLAG",
+        f"Unknown python_call flag: {flag!r}",
+        status_code=404,
+    )

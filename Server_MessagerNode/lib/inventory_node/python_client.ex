@@ -24,16 +24,19 @@ defmodule InventoryNode.PythonClient do
   Returns `{:ok, map}` on success, `{:error, reason}` otherwise.
   """
   def call(payload, python_host, python_port) do
-    url = python_url(python_host, python_port)
+    # httpc richiede l'URL come charlist e, per i POST, content-type e body
+    # inseriti nella tupla di richiesta (il Body come 4° argomento è ignorato
+    # e produce :invalid_request su OTP recenti).
+    url = (python_url(python_host, python_port) <> "/python_call") |> to_charlist()
 
     case :httpc.request(
            :post,
-           {url <> "/python_call", [{"content-type", "application/json"}]},
-           [],
-           Jason.encode!(payload)
+           {url, [], ~c"application/json", JSON.encode!(payload)},
+           [timeout: @default_timeout],
+           []
          ) do
       {:ok, {{_http_version, 200, _status}, _headers, body}} ->
-        case Jason.decode(body) do
+        case JSON.decode(body) do
           {:ok, decoded} -> {:ok, decoded}
           {:error, reason} -> {:error, "malformed JSON response: #{inspect(reason)}"}
         end

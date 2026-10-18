@@ -6,6 +6,7 @@ from app.api.routes_auth import router as auth_router
 from app.api.routes_chain import router as chain_router
 from app.api.routes_health import router as health_router
 from app.api.routes_notifications import router as notifications_router
+from app.api.routes_python import router as python_router
 from app.api.routes_users import router as users_router
 from app.core.config import settings
 from app.core.exceptions import install_exception_handlers
@@ -49,4 +50,5 @@ app.include_router(auth_router, prefix=settings.api_prefix)
 app.include_router(notifications_router, prefix=settings.api_prefix)
 app.include_router(users_router, prefix=settings.api_prefix)
 app.include_router(chain_router, prefix=settings.api_prefix)
+app.include_router(python_router, prefix=settings.api_prefix)
 app.include_router(health_router, prefix=settings.api_prefix)
