@@ -22,11 +22,10 @@ defmodule InventoryNode.Application do
 
       # {InventoryNode.Worker, arg}
       engine_module,
-      # Ascolta la componente Python e messaggi ritrasmessi dal cliente in JSON
-     {Server_Interface.ClientListener, 8000},
 
       # Ascolta gli altri nodi Elixir in Erlang Binary
-     {Server_Interface.ClusterListener, 4000},
+    # HTTP listener per il backend Python
+     {InventoryNode.HTTPListener, []},
     ]
 
 

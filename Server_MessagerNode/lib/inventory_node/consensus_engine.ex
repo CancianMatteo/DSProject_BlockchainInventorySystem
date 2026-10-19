@@ -171,9 +171,9 @@ defmodule InventoryNode.ConsensusEngine do
 
   defp propose_block(state) do
    payload = %{flag: "prepare_block", node_id: Node.self(), current_height: state.current_height}
-    block_data_and_signature = send_to_python_service(payload, state.python_host, state.python_port)
+    result = send_to_python_service(payload, state.python_host, state.python_port)
 
-    case block_data_and_signature do
+    case result do
       %{} ->
         Logger.warning("Nessun blocco da proporre al momento. (Nessuna transazione in coda, crash del nodo o comportamento bizantino del Proposer)")
         state
@@ -211,7 +211,9 @@ def handle_cast({:pre_prepare, height, round, proposer_id, block_data, signature
   Task.start(fn ->
     is_valid = send_to_python_service(payload, state.python_host, state.python_port)
 
-    if is_valid["status"] do
+    case send_to_python_service(payload, state.python_host, state.python_port) do
+      {:ok, %{"status" => is_valid}} ->
+      if is_valid do
       expected_proposer = Enum.at(state.validators, rem(height + round, length(state.validators)))
 
       if proposer_id == expected_proposer do
@@ -226,10 +228,20 @@ def handle_cast({:pre_prepare, height, round, proposer_id, block_data, signature
             |> Map.put("conflicting_block", state.pending_block)
             |> Map.put("conflicting_signature", state.temporary_signature)
 
-          proof = send_to_python_service(conflict_payload, state.python_host, state.python_port)
-
-          if proof["status"] do
-            msg = {:round_change, proof["proof"]}
+          case send_to_python_service(conflict_payload, state.python_host, state.python_port) do
+            {:ok, %{"status" => proof_status} = proof} ->
+              if proof_status do
+            msg = {:round_change, %{
+              "flag" => "round_change",
+              "height" => height,
+              "target_round" => round + 1,
+              "validator_id" => state.node_id,
+              "conflicting_block" => state.pending_block, # Corretto: mancava "state."
+              "conflicting_signature" => state.temporary_signature,
+              "forged_block" => block_data,
+              "forged_signature" => signature,
+              validator_signature: proof["validator_signature"]
+            }}
 
             broadcast_to_all(state.peers, msg)
             Logger.warning("Conflitto di blocco rilevato da #{proposer_id}. Avvio ROUND_CHANGE verso il round #{round + 1}")
@@ -237,7 +249,7 @@ def handle_cast({:pre_prepare, height, round, proposer_id, block_data, signature
 
         else
           # ESEGUITO SOLO SE pending_block == nil
-          send(engine_pid, {:verified_pre_prepare, height, round, proposer_id, block_data, is_valid["status"]})
+          send(engine_pid, {:verified_pre_prepare, height, round, proposer_id, block_data, is_valid})
         end
 
       end
@@ -299,8 +311,9 @@ end
       payload = %{"flag" => "verified_prepare", "height" => height, "round" => round, "validator_id" => validator_id, "signature" => signature}
 
       Task.start(fn ->
-        is_valid = send_to_python_service(payload, state.python_host, state.python_port)
-        send(engine_pid, {:verified_prepare, height, round, validator_id, is_valid["status"]})
+        case send_to_python_service(payload, state.python_host, state.python_port) do
+        {:ok, %{"status" => is_valid}} ->
+          send(engine_pid, {:verified_prepare, height, round, validator_id, is_valid})
       end)
     end
 
@@ -319,10 +332,10 @@ end
 
         # COMMIT
         payload = %{"flag" => "commit", "height" => height, "round" => round, "validator_id" => state.node_id}
-        signature = send_to_python_service(payload, state.python_host, state.python_port)
+        case send_to_python_service(payload, state.python_host, state.python_port) do
+          {:ok, %{"signature" => signature}} ->
 
-
-        msg = {:commit, height, round, state.node_id, signature["signature"]}
+          msg = {:commit, height, round, state.node_id, signature}
         broadcast_to_all(state.peers, msg)
 
         # IL NODO AGGIUNGE SUBITO IL PROPRIO VOTO DI COMMIT
@@ -352,8 +365,9 @@ end
     payload = %{"flag" => "verified_commit", "height" => height, "round" => round, "validator_id" => validator_id, "signature" => signature}
 
     Task.start(fn ->
-      is_valid = send_to_python_service(payload, state.python_host, state.python_port)
-      send(engine_pid, {:verified_commit, height, round, validator_id, is_valid["status"]})
+      case send_to_python_service(payload, state.python_host, state.python_port) do
+        {:ok, %{"status" => is_valid}} ->
+          send(engine_pid, {:verified_commit, height, round, validator_id, is_valid})
     end)
   end
     {:noreply, state}
@@ -370,10 +384,8 @@ end
         # scrittura del blocco sul servizio Python (simulazione di scrittura su DB)
         payload = %{"flag" => "write_block", "height" => height, "block_data" => state.pending_block}
         case Task.start(fn ->
-        result = send_to_python_service(payload, state.python_host, state.python_port)
-
-        case result do
-         %{"status" => true} ->
+          case send_to_python_service(payload, state.python_host, state.python_port) do
+            {:ok, %{"status" => true}} ->
            Logger.info("Blocco #{height} scritto correttamente sul servizio Python.")
 
          %{"status" => false} ->
@@ -459,23 +471,5 @@ end
 
 
   defp send_to_python_service(payload, py_host, py_port) do
-    case :gen_tcp.connect(py_host, py_port, [:binary, active: false], 2000) do
-      {:ok, socket} ->
-        :gen_tcp.send(socket, Jason.encode!(payload))
-        result = case :gen_tcp.recv(socket, 0, 2000) do
-          {:ok, response_json} ->
-            case Jason.decode(response_json) do
-              {:ok, parsed_response} -> parsed_response
-              {:error, reason} ->
-                Logger.error("Errore nel parsing della risposta JSON dal servizio Python: #{inspect(reason)}")
-                false
-            end
-          {:error, reason} ->
-            Logger.error("Errore di lettura dal servizio Python: #{inspect(reason)}")
-            false
-        end
-        :gen_tcp.close(socket)
-        result
-      _ -> false
-    end
+    InventoryNode.PythonClient.call(payload, py_host, py_port)
   end

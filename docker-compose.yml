@@ -26,11 +26,11 @@ services:
 
   python_validator_a:
     build: 
-      context: ./Server_Backend
+      context: ./Server_Python
     container_name: bis_api_server_a # Nome univoco
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file:
-      - ./Server_Backend/.env 
+      - ./Server_Python/.env 
     volumes:
       - bis_data_a:/data # volume univoco per il nodo A
     ports:
@@ -42,7 +42,7 @@ services:
           - python_validator
 
   node_a:
-    build: ./Server_Interface
+    build: ./Server_MessagerNode
     environment:
       - NODE_ID=node_a
       - BYZANTINE_MODE=false
@@ -62,11 +62,11 @@ services:
 
   python_validator_b:
     build: 
-      context: ./Server_Backend
+      context: ./Server_Python
     container_name: bis_api_server_b # Nome univoco
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file:
-      - ./Server_Backend/.env 
+      - ./Server_Python/.env 
     volumes:
       - bis_data_b:/data # volume univoco per il nodo B
     ports:
@@ -78,7 +78,7 @@ services:
           - python_validator
 
   node_b:
-    build: ./Server_Interface
+    build: ./Server_MessagerNode
     environment:
       - NODE_ID=node_b
       - BYZANTINE_MODE=false
@@ -98,11 +98,11 @@ services:
   
   python_validator_c:
     build: 
-      context: ./Server_Backend
+      context: ./Server_Python
     container_name: bis_api_server_c # Nome univoco
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file:
-      - ./Server_Backend/.env 
+      - ./Server_Python/.env 
     volumes:
       - bis_data_c:/data # volume univoco per il nodo C
     ports:
@@ -114,7 +114,7 @@ services:
           - python_validator
 
   node_c:
-    build: ./Server_Interface
+    build: ./Server_MessagerNode
     environment:
       - NODE_ID=node_c
       - BYZANTINE_MODE=false
@@ -134,11 +134,11 @@ services:
  
   python_validator_d:
     build: 
-      context: ./Server_Backend
+      context: ./Server_Python
     container_name: bis_api_server_d # Nome univoco
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file:
-      - ./Server_Backend/.env 
+      - ./Server_Python/.env 
     volumes:
       - bis_data_d:/data # volume univoco per il nodo D
     ports:
@@ -150,7 +150,7 @@ services:
           - python_validator
 
   node_d_byzantine:
-    build: ./Server_Interface
+    build: ./Server_MessagerNode
     environment:
       - NODE_ID=node_d_byzantine
       - BYZANTINE_MODE=true 
