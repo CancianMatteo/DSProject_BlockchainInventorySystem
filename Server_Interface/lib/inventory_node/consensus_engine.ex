@@ -216,6 +216,7 @@ def handle_cast({:pre_prepare, height, round, proposer_id, block_data, signature
 
       if proposer_id == expected_proposer do
 
+        # È DA CAMBIARE QUESTO E SPOSTARLO SULLA FUNZIONE PREPARE (BISOGNA FARE IL CONTROLLO TRAMITE HASH DEL BLOCCO)
         # CONTROLLO SU PENDING BLOCK
         if state.pending_block != nil do
           # Creiamo un nuovo payload aggiornato:
@@ -228,17 +229,7 @@ def handle_cast({:pre_prepare, height, round, proposer_id, block_data, signature
           proof = send_to_python_service(conflict_payload, state.python_host, state.python_port)
 
           if proof["status"] do
-            msg = {:round_change, %{
-              "flag" => "round_change",
-              "height" => height,
-              "target_round" => round + 1,
-              "validator_id" => state.node_id,
-              "conflicting_block" => state.pending_block, # Corretto: mancava "state."
-              "conflicting_signature" => state.temporary_signature,
-              "forged_block" => block_data,
-              "forged_signature" => signature,
-              validator_signature: proof["validator_signature"]
-            }}
+            msg = {:round_change, proof["proof"]}
 
             broadcast_to_all(state.peers, msg)
             Logger.warning("Conflitto di blocco rilevato da #{proposer_id}. Avvio ROUND_CHANGE verso il round #{round + 1}")
