@@ -76,12 +76,90 @@ Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requi
   "signature" =>signature,
   "conflicting_block"=> state.pending_block,
 "conflicting_signature" => state.temporary_signature
-  } : Dovresti verificare che 'block_data' e la sua 'signature' corrispondano a quelli del leader che la proppone 'proposer_id', lo stesso per "conflicting_block" e "conflicting_signature". Se entrambi sono firmati da 'proposer_id' e i blocchi sono diversi allora restituisci un JSON con {"status": boolean, "validator_signature": signature} con "status" = true e la firma del nodo che sta controllando su le proof (proof è "validator_id","block_data","signature","conflicting_block","conflicting_signature") se il leader ha proposto effettivamente due blocchi diversi (bizantino), false altrimenti
+  } : Dovresti verificare che 'block_data' e la sua 'signature' corrispondano a quelli del leader che la proppone 'proposer_id', lo stesso per "conflicting_block" e "conflicting_signature". Se entrambi sono firmati da 'proposer_id' e i blocchi sono diversi allora restituisci un JSON con {"status": boolean, "proof": JSON} con "status" = true se il leader ha proposto effettivamente due blocchi diversi (bizantino), false altrimenti. La firma del nodo che sta controllando deve firmare: proof_da_firmare = %{
+  "flag" => "pre_prepare_conflict",
+  "height" => height,
+  "round" => round,
+  "validator_id" => my_node_id,
+  "hash_1" => crypto_hash(block_data),
+  "hash_2" => crypto_hash(conflicting_block) }
+  
+   mentre 'proof' sarà fatto come: 
+  {
+  "flag": "pre_prepare_conflict_proof",
+  "height": 1054,
+  "round": 3,
+  "proposer_id": "node_1",
+  "validator_id": "node_5",
+  "forged_header": {
+    "previous_block_hash": "...",
+    "transactions_root": "0xaaa...",
+    "state_root": "..."
+  },
+  "forged_signature": "0x_firma_leader_su_forged_header",
+  "conflicting_header": {
+    "previous_block_hash": "...",
+    "transactions_root": "0xbbb...",
+    "state_root": "..."
+  },
+  "conflicting_signature": "0x_firma_leader_su_conflicting_header",
+  "validator_signature": "0x_firma_del_nodo_5_sul_payload_di_accusa"
+}   in questo modo non peserà tanti byte l'invio di dati
+
+
+
+
+- Se riceve invece il JSON precedente, ovvero: {
+  "flag": "pre_prepare_conflict_proof",
+  "height": 1054,
+  "round": 3,
+  "proposer_id": "node_1",
+  "validator_id": "node_5",
+  "forged_header": {
+    "previous_block_hash": "...",
+    "transactions_root": "0xaaa...",
+    "state_root": "..."
+  },
+  "forged_signature": "0x_firma_leader_su_forged_header",
+  "conflicting_header": {
+    "previous_block_hash": "...",
+    "transactions_root": "0xbbb...",
+    "state_root": "..."
+  },
+  "conflicting_signature": "0x_firma_leader_su_conflicting_header",
+  "validator_signature": "0x_firma_del_nodo_5_sul_payload_di_accusa"
+}   Il nodo deve: 
+1) Calcolo degli Hash degli Header (Verifica della Diversità)
+Serializza in formato canonico e deterministico forged_header e conflicting_header. Applica la funzione di hash del tuo protocollo (es. SHA-256, Keccak256) su entrambi gli oggetti.
+Azione crittografica: Calcola hash_forged = Hash(Serialize(forged_header)) e hash_conflicting = Hash(Serialize(conflicting_header)).
+Controllo: Verifica che hash_forged != hash_conflicting. Se sono uguali, i blocchi sono identici e non c'è nessuna doppia proposta.
+
+2) Verifica delle Firme del Leader (Equivocation Check)
+Recupera la chiave pubblica associata a proposer_id dal registro dei validatori corrente.
+Azione crittografica:
+
+Esegui VerifySignature(pub_key_proposer, hash_forged, forged_signature).
+
+Esegui VerifySignature(pub_key_proposer, hash_conflicting, conflicting_signature).
+
+3) Verifica della Firma dell'Accusatore (Autenticità dell'accusa)
+Ricostruisci il payload dell'accusa esattamente come lo ha costruito il nodo 5 prima di inviarlo, per assicurarti che il nodo 5 si stia assumendo la responsabilità del messaggio.
+Azione crittografica:
+
+Ricrea la struttura dati: payload = { "flag": "pre_prepare_conflict", "height": 1054, "round": 3, "validator_id": "node_5", "hash_1": hash_forged, "hash_2": hash_conflicting }.
+
+Calcola hash_payload = Hash(Serialize(payload)).
+
+Recupera la chiave pubblica di validator_id e verifica VerifySignature(pub_key_validator, hash_payload, validator_signature)
+
+
+
+
 
 
 DUE TIPI DI ROUND CHANGE (timeout e doppia proposta di blocchi diversi):
 - JSON di forma {
-      "flag" => "verified_round_change",
+      "flag" => "round_change",
       "height" => state.current_height,
       "target_round" => target_round,
       "validator_id" => state.node_id,
@@ -89,7 +167,7 @@ DUE TIPI DI ROUND CHANGE (timeout e doppia proposta di blocchi diversi):
     } : in questo caso bisogna verificare la 'signature' del nodo "validator_id" con la sua chiave pubblica, ritornando un JSON con {"status": true} o {"status": false}
 
 - JSON di forma  {
-      "flag" => "verified_round_change",
+      "flag" => "round_change",
       "height" => height,
       "target_round" => round + 1,
       "validator_id" => state.node_id,
@@ -98,7 +176,7 @@ DUE TIPI DI ROUND CHANGE (timeout e doppia proposta di blocchi diversi):
       "forged_block" => block_data,
       "forged_signature" => signature,
       validator_signature: proof["validator_signature"]
-            } : Dovresti verificare che 'block_data' e la sua 'signature' corrispondano a quelli del leader che la proppone 'proposer_id', lo stesso per "conflicting_block" e "conflicting_signature". Se entrambi sono firmati da 'proposer_id' e i blocchi sono diversi allora restituisci un JSON con {"status": boolean}. Verifica anche la firma del validatore con la sua chiave pubblica sulla proof (proof è "validator_id","block_data","signature","conflicting_block","conflicting_signature")
+            } : Dovresti verificare che 'block_data' e la sua 'signature' corrispondano a quelli del leader che la proppone 'proposer_id', lo stesso per "conflicting_block" e "conflicting_signature". Se entrambi sono firmati da 'proposer_id' e i blocchi sono diversi allora restituisci un JSON con {"status": boolean, "validator_signature": String}. Verifica anche la firma del validatore con la sua chiave pubblica sulla proof (proof è "validator_id","block_data","signature","conflicting_block","conflicting_signature")
 
 - JSON di forma {"flag" => "pre_prepare",
  "height" => height,
@@ -136,6 +214,8 @@ DUE TIPI DI ROUND CHANGE (timeout e doppia proposta di blocchi diversi):
                   "height" => height,
                   "block_data" => state.pending_block} : scrivi il blocco "block_data" definitivamente sulla blockchain e restituisci un JSON {"status": boolean} con 'true' se il blocco è stato scritto correttamente o 'false' altrimenti
 
+                  
+- Ho fatto il merging del docker compose impostando i nodi python come erano impostati nel docker compose dentro Server_backend. è da modificare probabilmente la porta con cui il client comunicherà con il Server_backend (scegli una tra 5001,5002,5003,5004)
 
   
 
