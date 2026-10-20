@@ -12,11 +12,6 @@ defmodule InventoryNode.Application do
         InventoryNode.ConsensusEngine
       end
 
-    # Il file cluster.json valida la topologia al boot. I peer effettivi per il
-    # consenso sono forniti dalla variabile d'ambiente PEERS.
-    _cluster_map = File.read!("cluster.json")
-      |> JSON.decode!()
-
     cluster_port =
       case System.get_env("ELIXIR_CLUSTER_PORT") do
         nil -> 4000
