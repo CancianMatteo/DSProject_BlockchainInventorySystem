@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:myapp/auth/auth_provider.dart';
-import 'package:myapp/inventory/barcode_scanner_screen.dart';
-import 'package:myapp/inventory/confirmation_screen.dart';
-import 'package:myapp/inventory/widgets/category_filter_chip.dart';
-import 'package:myapp/inventory/widgets/inventory_list_item.dart';
-import 'package:myapp/models/api_response.dart' show ApiResponse;
-import 'package:myapp/models/inventory_item.dart';
-import 'package:myapp/notifications/notification_provider.dart';
-import 'package:myapp/services/api_service.dart';
+import 'package:distr_bis/auth/auth_provider.dart';
+import 'package:distr_bis/inventory/barcode_scanner_screen.dart';
+import 'package:distr_bis/inventory/confirmation_screen.dart';
+import 'package:distr_bis/inventory/widgets/category_filter_chip.dart';
+import 'package:distr_bis/inventory/widgets/inventory_list_item.dart';
+import 'package:distr_bis/models/api_response.dart' show ApiResponse;
+import 'package:distr_bis/models/inventory_item.dart';
+import 'package:distr_bis/notifications/notification_provider.dart';
+import 'package:distr_bis/services/api_service.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
 

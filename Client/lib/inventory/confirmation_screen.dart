@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:myapp/models/inventory_item.dart';
+import 'package:distr_bis/models/inventory_item.dart';
 
 class ConfirmationScreen extends StatefulWidget {
   final Map<String, int> quantityChanges;

@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
-import 'package:myapp/notifications/notification_model.dart';
-import 'package:myapp/services/api_service.dart';
+import 'package:distr_bis/notifications/notification_model.dart';
+import 'package:distr_bis/services/api_service.dart';
 
 class NotificationProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();

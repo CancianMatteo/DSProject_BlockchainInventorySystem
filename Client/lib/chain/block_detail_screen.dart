@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart' hide Block;
-import 'package:myapp/models/block.dart';
+import 'package:distr_bis/models/block.dart';
 
 class BlockDetailScreen extends StatelessWidget {
   final String blockId;

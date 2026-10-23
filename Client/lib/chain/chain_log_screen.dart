@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart' hide Block;
-import 'package:myapp/models/block.dart';
-import 'package:myapp/services/api_service.dart';
+import 'package:distr_bis/models/block.dart';
+import 'package:distr_bis/services/api_service.dart';
 
 class ChainLogScreen extends StatefulWidget {
   const ChainLogScreen({super.key});

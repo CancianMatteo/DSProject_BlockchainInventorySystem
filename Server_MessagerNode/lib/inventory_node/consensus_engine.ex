@@ -242,15 +242,8 @@ defmodule InventoryNode.ConsensusEngine do
         not verified? or proposer_id != expected_proposer ->
           send(engine_pid, {:verified_pre_prepare, height, round, proposer_id, block_data, signature, false})
 
-<<<<<<< HEAD
         state.pending_block != nil ->
           # CONTROLLO SU PENDING BLOCK: il proposer ha firmato due blocchi diversi?
-=======
-        # È DA CAMBIARE QUESTO E SPOSTARLO SULLA FUNZIONE PREPARE (BISOGNA FARE IL CONTROLLO TRAMITE HASH DEL BLOCCO)
-        # CONTROLLO SU PENDING BLOCK
-        if state.pending_block != nil do
-          # Creiamo un nuovo payload aggiornato:
->>>>>>> origin
           conflict_payload =
             payload
             |> Map.put("flag", "pre_prepare_conflict")
