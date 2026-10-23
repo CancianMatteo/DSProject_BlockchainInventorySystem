@@ -166,6 +166,7 @@ printf '%s' "$INITIAL_ADMIN_PASSWORD" > "$SECRET_DIR/initial-admin-password"
 chmod 600 "$SECRET_DIR/initial-admin-password"
 
 for node in node_a node_b node_c node_d; do
+  suffix="$(node_number "$node")"
   node_env_dir="$SECRET_DIR/env/$node"
   mkdir -p "$node_env_dir"
   chmod 700 "$node_env_dir"
@@ -183,9 +184,11 @@ for node in node_a node_b node_c node_d; do
       /^NODE_ID=/ { print "NODE_ID=" node_id; next }
       /^NODE_PRIVATE_KEY=/ { print "NODE_PRIVATE_KEY=" private_key; next }
       /^NODE_PUBLIC_KEYS=/ { print "NODE_PUBLIC_KEYS=" public_keys; next }
-      /^API_PORT=/ { print "API_PORT=8000"; next }
+      /^API_PORT=/ { print "API_PORT=8000"; next } # single Python socket for clients + Elixir (see PORTS.md)
       /^APP_CLIENT_TOKEN=/ { print "APP_CLIENT_TOKEN=" app_client_token; next }
       /^INITIAL_ADMIN_PASSWORD=/ { print "INITIAL_ADMIN_PASSWORD=" initial_admin_password; next }
+      /^ELIXIR_HOST=/ { next } # set explicitly below (per-node container alias)
+      /^ELIXIR_HTTP_PORT=/ { print "ELIXIR_HTTP_PORT=600" suffix; next } # per-node Elixir listener (see PORTS.md)
       { print }
     ' "$ROOT_DIR/Server_Python/.env.example" > "$node_env_dir/.env"
 
@@ -195,7 +198,7 @@ for node in node_a node_b node_c node_d; do
     printf 'SERVER_SIGN_PRIVATE_KEY=%s\n' "${!private_var}"
     printf 'SERVER_SIGN_PUBLIC_KEY=%s\n' "${!public_var}"
     printf 'ELIXIR_HOST=%s\n' "bis-messagernode-$node"
-    printf 'ELIXIR_HTTP_PORT=4001\n'
+    printf 'ELIXIR_HTTP_PORT=600%s\n' "$suffix"
   } >> "$node_env_dir/.env"
   chmod 600 "$node_env_dir/.env"
 done
@@ -311,9 +314,10 @@ for node in $NODES; do
     --env NODE_ID="$node" \
     --env PYTHON_HOST="backend-$node" \
     --env PYTHON_PORT=8000 \
-    --env ELIXIR_HTTP_PORT=4001 \
+    --env ELIXIR_HTTP_PORT=600$suffix \
     --env "PEERS=$peers" \
     --publish "400$suffix:4000" \
+    --publish "600$suffix:600$suffix" \
     bis-messagernode:deploy >/dev/null
 done
 
@@ -406,10 +410,10 @@ Deployment completed.
   VPS1 ($VPS1_IP:$VPS1_PATH): node_a -> :8001/:4001, node_b -> :8002/:4002
   VPS2 ($VPS2_IP:$VPS2_PATH): node_c -> :8003/:4003, node_d -> :8004/:4004
 
-Simulated-health endpoints (per node Python API, testing only):
-  POST /api/v1/simhealth/healthy     - normal behaviour (default)
-  POST /api/v1/simhealth/noclients   - talks to peers, ignores clients
-  POST /api/v1/simhealth/noresponse  - talks to nobody
-  POST /api/v1/simhealth/bizantine   - drops client txs, forges proposals/votes
-Example: curl -X POST http://<vps-ip>:8001/api/v1/simhealth/noclients
+SimBehaviour endpoints (per node Python API, testing only):
+  POST /api/v1/simbehaviour/healthy     - normal behaviour (default)
+  POST /api/v1/simbehaviour/noclients   - talks to peers, ignores clients
+  POST /api/v1/simbehaviour/noresponse  - talks to nobody
+  POST /api/v1/simbehaviour/bizantine   - drops client txs, forges proposals/votes
+Example: curl -X POST http://<vps-ip>:8001/api/v1/simbehaviour/noclients
 EOF

@@ -28,11 +28,21 @@ defmodule InventoryNode.Router do
   end
 
   defp parse_peers(peers_env) do
+    # Formati supportati: "id@host:port" (host diverso dall'id, deploy
+    # multi-VPS con IP pubblici) e "host:port" (l'id coincide con l'host,
+    # come nelle docker-compose locali).
     (peers_env || "")
     |> String.split(",", trim: true)
     |> Enum.into(%{}, fn peer ->
-      [host, port] = String.split(String.trim(peer), ":")
-      {host, {String.to_charlist(host), String.to_integer(port)}}
+      case String.split(String.trim(peer), "@", parts: 2) do
+        [peer_id, host_port] ->
+          [host, port] = String.split(host_port, ":", parts: 2)
+          {peer_id, {String.to_charlist(host), String.to_integer(port)}}
+
+        [host_port] ->
+          [host, port] = String.split(host_port, ":", parts: 2)
+          {host, {String.to_charlist(host), String.to_integer(port)}}
+      end
     end)
   end
 
@@ -41,6 +51,14 @@ defmodule InventoryNode.Router do
   # ---------------------------------------------------------------------------
 
   def handle_payload(payload) do
+    # Modalità noresponse: il nodo non risponde a nessuno.
+    case InventoryNode.SimBehaviour.get() do
+      :noresponse -> :ok
+      mode -> do_handle_payload(payload, mode)
+    end
+  end
+
+  defp do_handle_payload(payload, sim_mode) do
     python_host = python_host()
     python_port = python_port()
     peers = parse_peers(System.get_env("PEERS"))
@@ -77,7 +95,9 @@ defmodule InventoryNode.Router do
             # Inonda la transazione solo se proviene da un nodo esterno a questo
             # gruppo E la mempool Python l'ha effettivamente inserita (il campo
             # "duplicate" impedisce i loop di re-inoltro tra i nodi).
-            if tx["duplicate"] != true and tx["from_node"] != my_id and tx["from_node"] not in Map.keys(peers) do
+            # In modalità bizantine il nodo non condivide con gli altri nodi
+            # le transazioni ricevute dai client.
+            if sim_mode != :bizantine and tx["duplicate"] != true and tx["from_node"] != my_id and tx["from_node"] not in Map.keys(peers) do
               tx2 = tx |> Map.put("from_node", my_id) |> Map.delete("duplicate")
               broadcast_to_peers(peers, tx2)
             end
@@ -154,6 +174,25 @@ defmodule InventoryNode.Router do
 
 
   defp broadcast_to_peers(peers, message) do
+    case InventoryNode.SimBehaviour.get() do
+      :noresponse ->
+        # Modalità noresponse: il nodo non parla con nessuno.
+        :ok
+
+      :bizantine ->
+        # In modalità bizantine il Router non inoltra transazioni ai peer.
+        if match?(%{"flag" => "transaction"}, message) do
+          :ok
+        else
+          do_broadcast_to_peers(peers, message)
+        end
+
+      _ ->
+        do_broadcast_to_peers(peers, message)
+    end
+  end
+
+  defp do_broadcast_to_peers(peers, message) do
     data = :erlang.term_to_binary(message)
     Enum.each(peers, fn {peer_id, {host, port}} ->
       case Task.start(fn -> send_tcp(peer_id, host, port, data) end) do

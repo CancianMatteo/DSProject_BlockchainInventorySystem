@@ -51,7 +51,14 @@ Base path: `/api/v1`
 Transport notes:
 - HTTPS is enabled via NGINX on `bis.samuel-daros.it` (prod) and `bis-dev.samuel-daros.it` (dev).
 - HTTP is not disabled; it redirects to HTTPS.
-- Backend listens on internal port `2900` and should not be exposed publicly.
+- Each node's Python backend listens on container port `8000` and serves
+  BOTH external clients (`/api/v1/auth|users|chain|...`) AND the co-located
+  Elixir engine (`POST /api/v1/python_call`) on that single socket: FastAPI
+  routes by URL path, so no second port is needed. The 2-VPS `deploy.sh`
+  publishes it as host ports 8001..8004 (nodes a/b/c/d).
+- The Elixir side never binds 8000: it listens on 4000 (cluster gossip) and
+  on the internal-only 6001 (simbehaviour forwarding from Python). The deploy
+  publishes 4000 as host ports 4001..4004.
 - TLS in dev may use self-signed certs for testing; clients must explicitly allow them in debug.
 
 ### 3.1 POST /auth/login
@@ -586,22 +593,25 @@ Operational safeguards:
 ## 8. Docker Deployment Blueprint
 
 Container behavior:
-- Single service exposing API on port `5000`.
+- Single service exposing API on port `8000` (both client traffic and the
+  co-located Elixir engine share this socket; FastAPI routes by path).
 - SQLite DB persisted through mounted volume.
 - Environment-driven configuration.
 
 Environment variables:
 - `APP_ENV=production`
 - `API_HOST=0.0.0.0`
-- `API_PORT=5000`
+- `API_PORT=8000`
 - `JWT_SECRET=...`
 - `SERVER_SIGN_PRIVATE_KEY=...`
 - `DB_PATH=/data/bis.db`
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`
 - `SECURITY_ALERT_EMAIL`
+- `ELIXIR_HOST=...` (container/network alias of the co-located Elixir node)
+- `ELIXIR_HTTP_PORT=6001` per node (node_a -> 6001, ... node_d -> 6004; internal Elixir HTTP listener)
 
 Runtime command:
-- `uvicorn app.main:app --host 0.0.0.0 --port 5000`
+- `python -m app.run_server` (uvicorn on `$API_HOST:$API_PORT`, i.e. `0.0.0.0:8000`)
 
 Health endpoints:
 - `GET /health/live`

@@ -4,9 +4,15 @@ defmodule InventoryNode.HTTPListener do
   `httpx`) can POST JSON payloads to this Elixir node.
 
   This is separate from the `ClusterListener`, which keeps speaking the
-  Erlang-term wire protocol (`binary_to_term`) for intra-cluster gossip.
-  The Python service is reachable at `http://<hostname>:<port>/api/v1/<endpoint>`
-  where `<endpoint>` selects the operation by the `\"flag\"` field of the JSON body.
+  Erlang-term wire protocol (`binary_to_term`) for intra-cluster gossip on
+  port 4000. This listener binds the per-node simbehaviour port (default 4001;
+  deployed as 6001..6004 via ELIXIR_HTTP_PORT) and handles
+  `POST /api/v1/simbehaviour` (mode forwarding from Python) plus the legacy
+  `POST /api/v1/python_call` echo used in transport checks.
+
+  Port map per node: Python owns 8000 in its own container (clients AND
+  Elixir share that one socket, routed by URL path), Elixir owns 4000
+  (cluster) + 600x (this listener, per node). No split of 8000 is needed.
 
   The listener reads a single HTTP request, dispatches it, writes a minimal
   HTTP/1.1 response with `Content-Length` and `Connection: close`. It does not
@@ -201,6 +207,24 @@ defmodule InventoryNode.HTTPListener do
   end
 
   # dispatch/3 returns {status, reason, json_body}; serve/1 serialises it.
+
+  # Imposta lo stato di comportamento simulato del nodo (vedi InventoryNode.SimBehaviour).
+  defp dispatch("/api/v1/simbehaviour", _headers, body) do
+    case JSON.decode(body) do
+      {:ok, %{"mode" => mode}} when is_binary(mode) ->
+        case InventoryNode.SimBehaviour.set(mode) do
+          {:ok, set_mode} ->
+            {200, "OK", %{"ok" => true, "mode" => to_string(set_mode)}}
+
+          {:error, _} ->
+            {400, "Bad Request", %{"error" => "unknown mode", "allowed" => InventoryNode.SimBehaviour.modes()}}
+        end
+
+      _ ->
+        {400, "Bad Request", %{"error" => "expected a JSON body like {\"mode\": \"healthy\"}"}}
+    end
+  end
+
   defp dispatch("/api/v1/python_call", _headers, body) do
     case JSON.decode(body) do
       {:ok, payload} ->

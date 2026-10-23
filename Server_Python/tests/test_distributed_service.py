@@ -15,6 +15,7 @@ from app.api.routes_chain import get_chain_history
 from app.db.models import PendingTransaction
 from app.db.repositories import insert_block
 from app.db.session import Base
+from app.services import simbehaviour_service
 from app.services.cache_service import inventory_cache
 from app.services.distributed_service import (
     DistributedReject,
@@ -247,3 +248,88 @@ def test_chain_history_returns_descending_cursor_pages(db):
     assert [block["n_block"] for block in last_page["blocks"]] == [1]
     assert last_page["has_more"] is False
     assert last_page["next_before_n_block"] is None
+
+
+@pytest.fixture
+def healthy_mode(monkeypatch):
+    monkeypatch.setattr(simbehaviour_service, "_forward_to_elixir", lambda mode: None)
+    previous = simbehaviour_service.get_mode()
+    simbehaviour_service.set_mode(simbehaviour_service.HEALTHY)
+    try:
+        yield
+    finally:
+        simbehaviour_service.set_mode(previous)
+
+
+def _simbehaviour_client():
+    pytest.importorskip("httpx", reason="httpx is required for TestClient")
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_simbehaviour_endpoints_switch_mode(healthy_mode, monkeypatch):
+    pytest.importorskip("httpx", reason="httpx is required for TestClient")
+    monkeypatch.setattr(simbehaviour_service, "_forward_to_elixir", lambda mode: None)
+    client = _simbehaviour_client()
+
+    assert client.get("/api/v1/simbehaviour").json() == {"ok": True, "mode": "healthy"}
+
+    for mode in ("noclients", "noresponse", "bizantine", "healthy"):
+        response = client.post(f"/api/v1/simbehaviour/{mode}")
+        assert response.status_code == 200
+        assert response.json() == {"ok": True, "mode": mode}
+        assert simbehaviour_service.get_mode() == mode
+
+
+def test_noclients_blocks_clients_but_not_python_call(healthy_mode, monkeypatch, validator_keys):
+    pytest.importorskip("httpx", reason="httpx is required for TestClient")
+    monkeypatch.setattr(simbehaviour_service, "_forward_to_elixir", lambda mode: None)
+    client = _simbehaviour_client()
+
+    assert client.post("/api/v1/simbehaviour/noclients").status_code == 200
+
+    # Client-facing endpoints are rejected...
+    assert client.get("/api/v1/chain/history").status_code == 503
+    assert client.post("/api/v1/auth/login", json={"email": "a@b.c", "pwd": "secret12"}).status_code == 503
+    # ...while simbehaviour/health/python_call keep working.
+    assert client.get("/api/v1/simbehaviour").status_code == 200
+    assert client.get("/api/v1/health/live").status_code == 200
+    assert client.post("/api/v1/python_call", json={"flag": "setup_keys"}).status_code == 200
+
+
+def test_noresponse_blocks_python_call_too(healthy_mode, monkeypatch):
+    pytest.importorskip("httpx", reason="httpx is required for TestClient")
+    monkeypatch.setattr(simbehaviour_service, "_forward_to_elixir", lambda mode: None)
+    client = _simbehaviour_client()
+
+    assert client.post("/api/v1/simbehaviour/noresponse").status_code == 200
+
+    assert client.get("/api/v1/chain/history").status_code == 503
+    assert client.post("/api/v1/python_call", json={"flag": "setup_keys"}).status_code == 503
+    # Control plane stays reachable so tests can recover the node.
+    assert client.get("/api/v1/simbehaviour").status_code == 200
+    assert client.get("/api/v1/health/live").status_code == 200
+
+
+def test_byzantine_drops_transactions_and_forges_signatures(db, validator_keys, healthy_mode, monkeypatch):
+    from app.services import distributed_service
+
+    monkeypatch.setattr(simbehaviour_service, "_forward_to_elixir", lambda mode: None)
+    simbehaviour_service.set_mode(simbehaviour_service.BIZANTINE)
+    try:
+        # Transactions are dropped (never stored) and acknowledged as forged.
+        transaction = make_transaction()
+        result = distributed_service.submit_transaction(db, transaction)
+        assert result.get("forged") is True
+        assert db.get(PendingTransaction, transaction["tx_id"]) is None
+
+        # Signatures/keys are forged: honest verification must fail.
+        content = {"hello": "world"}
+        forged_signature = distributed_service.sign_payload(content)
+        assert distributed_service.verify_validator_signature("node_a", content, forged_signature) is False
+        assert distributed_service.local_public_key() != json.loads(settings.validator_public_keys)["node_a"]
+    finally:
+        simbehaviour_service.set_mode(simbehaviour_service.HEALTHY)

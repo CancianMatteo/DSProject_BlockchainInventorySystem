@@ -7,7 +7,8 @@ defmodule InventoryNode.PythonClient do
   Requests are synchronous POSTs of a JSON body; the response is parsed back
   into a map.
 
-  The Python backend is a FastAPI service that speaks plain JSON over HTTP at:
+  The Python backend is a FastAPI service sharing the single container port
+  8000 for both clients and this engine (routed by URL path):
     http://<PYTHON_HOST>:<PYTHON_PORT>/api/v1/<endpoint>
 
   Each endpoint accepts a flat JSON object with a `"flag"` field that selects

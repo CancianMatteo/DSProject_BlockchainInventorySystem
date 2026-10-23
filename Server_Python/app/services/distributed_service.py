@@ -4,10 +4,13 @@ import base64
 import binascii
 import hashlib
 import json
+import os
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -18,6 +21,7 @@ from app.core.config import settings
 from app.core.exceptions import AppError
 from app.db import repositories
 from app.db.models import ChainBlock, PendingTransaction
+from app.services import simbehaviour_service
 from app.services.cache_service import inventory_cache
 
 
@@ -176,6 +180,11 @@ def _order_transactions(transactions: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def submit_transaction(db: Session, transaction: dict[str, Any]) -> dict[str, Any]:
+    if simbehaviour_service.is_byzantine():
+        # Drop the transaction (never reaches the mempool/peers) and forge a
+        # spoofed acknowledgement for the local engine.
+        forged = _spoof_transaction(transaction if isinstance(transaction, dict) else {}, settings.node_id)
+        return {"tx_id": forged["tx_id"], "status": "pending", "duplicate": True, "forged": True}
     normalized = _validate_transaction(transaction)
     tx_id = _transaction_id(normalized)
     if tx_id in _transactions_in_chain(db):
@@ -455,7 +464,47 @@ def transaction_status(db: Session, tx_id: str) -> dict[str, Any]:
 peer_public_keys: dict[str, str] = {}
 
 
+def _forge_signature(content: dict[str, Any]) -> str:
+    """Produce a well-formed but invalid signature (byzantine behaviour).
+
+    A fresh random key signs the payload so honest nodes fail verification
+    against the registered validator key.
+    """
+    decoy = Ed25519PrivateKey.generate()
+    return base64.b64encode(decoy.sign(canonical_json(content))).decode("ascii")
+
+
+def _spoof_transaction(base: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """Forge a fake transaction that honest nodes will reject."""
+    forged = {
+        **base,
+        "flag": "transaction",
+        "from_node": base.get("from_node") or node_id,
+        "tx_type": base.get("tx_type") or "inbound",
+        "item_id": base.get("item_id") or "spoofed-item",
+        "quantity": base.get("quantity") or 1,
+        "location": base.get("location") or "spoofed-warehouse",
+        "timestamp": base.get("timestamp") or datetime.now(UTC).isoformat(),
+        "tx_id": base.get("tx_id") or f"spoofed-{uuid4().hex}",
+        "pub_key": base.get("pub_key") or "",
+        "item_catalog": base.get("item_catalog") or {},
+    }
+    forged.pop("signature", None)
+    forged["signature"] = base64.b64encode(os.urandom(64)).decode("ascii")
+    return forged
+
+
 def local_public_key() -> str:
+    if simbehaviour_service.is_byzantine():
+        # Advertise an unrelated key so honest nodes cannot match this node
+        # to its registered validator identity.
+        decoy = Ed25519PrivateKey.generate()
+        return base64.b64encode(
+            decoy.public_key().public_bytes(
+                serialization.Encoding.Raw,
+                serialization.PublicFormat.Raw,
+            )
+        ).decode("ascii")
     public_keys = _configured_validator_keys()
     public_key = public_keys.get(settings.node_id)
     if not isinstance(public_key, str) or not public_key:
@@ -489,6 +538,8 @@ def _validator_private_key() -> Ed25519PrivateKey:
 
 
 def sign_payload(content: dict[str, Any]) -> str:
+    if simbehaviour_service.is_byzantine():
+        return _forge_signature(content)
     signature = _validator_private_key().sign(canonical_json(content))
     return base64.b64encode(signature).decode("ascii")
 
@@ -535,6 +586,32 @@ def prepare_proposal(db: Session, round_number: int) -> dict[str, Any]:
     if not block:
         # Nessuna transazione in mempool: il motore Elixir registra un warning.
         return {"flag": "prepare_block", "block_data": None}
+    if simbehaviour_service.is_byzantine():
+        # Tamper the proposal while keeping the original (valid) signature:
+        # honest nodes recompute the hash and reject the block.
+        tampered = dict(block)
+        transactions = list(tampered.get("transactions") or [])
+        if transactions and isinstance(transactions[0], dict):
+            first = dict(transactions[0])
+            quantity = first.get("quantity")
+            if isinstance(quantity, int) and not isinstance(quantity, bool):
+                first["quantity"] = quantity + 1
+            else:
+                first["quantity"] = 999999
+            transactions[0] = first
+            tampered["transactions"] = transactions
+        else:
+            tampered["transactions"] = [
+                _spoof_transaction({}, settings.node_id),
+            ]
+        content = _proposal_signature_payload(
+            block["height"], block["round"], settings.node_id, block["block_hash"]
+        )
+        return {
+            "flag": "prepare_block",
+            "block_data": tampered,
+            "proposer_sign": sign_payload(content),
+        }
     content = _proposal_signature_payload(
         block["height"], block["round"], settings.node_id, block["block_hash"]
     )

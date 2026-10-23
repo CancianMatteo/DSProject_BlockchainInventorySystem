@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     password_reset_max_attempts_per_day: int = 10
     app_client_token: str | None = None
 
+    # Co-located Elixir consensus engine (simbehaviour forwarding target).
+    elixir_host: str | None = None
+    elixir_http_port: int = 4001
+
     log_level: str = "INFO"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)

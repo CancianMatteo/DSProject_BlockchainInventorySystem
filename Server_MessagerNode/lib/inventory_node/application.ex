@@ -4,13 +4,10 @@ defmodule InventoryNode.Application do
 
   @impl true
   def start(_type, _args) do
-    is_byzantine = System.get_env("BYZANTINE_MODE") == "true"
-    engine_module =
-      if is_byzantine do
-        InventoryNode.ByzantineEngine
-      else
-        InventoryNode.ConsensusEngine
-      end
+    # Simulated behaviour faults are now a *runtime* mode
+    # (InventoryNode.SimBehaviour, set via POST /api/v1/simbehaviour/*), not a
+    # separate boot-time engine: there is a single ConsensusEngine whose
+    # broadcast/Router/Python behaviour is gated on the current mode.
 
     cluster_port =
       case System.get_env("ELIXIR_CLUSTER_PORT") do
@@ -21,7 +18,7 @@ defmodule InventoryNode.Application do
 
     children = [
       # Motore di consenso BFT-PoA
-      engine_module,
+      InventoryNode.ConsensusEngine,
 
       # Ascolta gli altri nodi Elixir in Erlang Binary (packet: 4 framing)
       {InventoryNode.ClusterListener, cluster_port},

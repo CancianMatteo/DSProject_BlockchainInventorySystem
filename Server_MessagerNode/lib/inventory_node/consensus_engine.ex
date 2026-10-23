@@ -462,6 +462,34 @@ defmodule InventoryNode.ConsensusEngine do
   end
 
   defp broadcast_to_all(peers, message) do
+    case InventoryNode.SimBehaviour.get() do
+      :noresponse ->
+        # Modalità noresponse: il nodo non parla con nessuno.
+        :ok
+
+      :bizantine ->
+        # Modalità bizantine: il nodo non inoltra nuove transazioni o
+        # proposte ai peer (il resto del traffico passa comunque, ma il
+        # backend Python produce firme/contenuti fasulli).
+        if byzantine_suppressed?(message) do
+          :ok
+        else
+          do_broadcast(peers, message)
+        end
+
+      _ ->
+        do_broadcast(peers, message)
+    end
+  end
+
+  # I messaggi di transazione/proposta non vengono mai inoltrati in
+  # modalità bizantine (né ai peer né in eco locale).
+  defp byzantine_suppressed?(%{"flag" => "transaction"}), do: true
+  defp byzantine_suppressed?({:transaction, _}), do: true
+  defp byzantine_suppressed?({:pre_prepare, _, _, _, _, _}), do: true
+  defp byzantine_suppressed?(_), do: false
+
+  defp do_broadcast(peers, message) do
     # Eco locale: il messaggio viene gestito anche da questo nodo.
     GenServer.cast(__MODULE__, message)
 
@@ -499,11 +527,21 @@ defmodule InventoryNode.ConsensusEngine do
   end
 
   defp parse_peers(peers_env) do
+    # Formati supportati: "id@host:port" (host diverso dall'id, deploy
+    # multi-VPS con IP pubblici) e "host:port" (l'id coincide con l'host,
+    # come nelle docker-compose locali).
     (peers_env || "")
     |> String.split(",", trim: true)
     |> Enum.into(%{}, fn peer ->
-      [host, port] = String.split(String.trim(peer), ":")
-      {host, {String.to_charlist(host), String.to_integer(port)}}
+      case String.split(String.trim(peer), "@", parts: 2) do
+        [peer_id, host_port] ->
+          [host, port] = String.split(host_port, ":", parts: 2)
+          {peer_id, {String.to_charlist(host), String.to_integer(port)}}
+
+        [host_port] ->
+          [host, port] = String.split(host_port, ":", parts: 2)
+          {host, {String.to_charlist(host), String.to_integer(port)}}
+      end
     end)
   end
 
