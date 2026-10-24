@@ -28,6 +28,7 @@ defmodule InventoryNode.PythonClient do
     # httpc richiede l'URL come charlist e, per i POST, content-type e body
     # inseriti nella tupla di richiesta (il Body come 4° argomento è ignorato
     # e produce :invalid_request su OTP recenti).
+
     url = (python_url(python_host, python_port) <> "/python_call") |> to_charlist()
 
     case :httpc.request(

@@ -97,6 +97,7 @@ defmodule InventoryNode.ConsensusEngine do
 
     # Python firma il round_change; se la firma non arriva si inoltra comunque
     # il payload originale (i peer lo rigetteranno in verifica).
+
     payload =
       case send_to_python_service(payload, state.python_host, state.python_port) do
         {:ok, signed} when is_map(signed) ->
@@ -123,7 +124,7 @@ defmodule InventoryNode.ConsensusEngine do
     engine_pid = self()
 
     round_payload = payload
-                    |> Map.put("flag", "verified_round_change") # assicura che il flag sia corretto
+                    |> Map.put("flag", "verified_round_change")
 
     # asincrona
     Task.start(fn ->
@@ -191,8 +192,7 @@ defmodule InventoryNode.ConsensusEngine do
     }
 
     case send_to_python_service(payload, state.python_host, state.python_port) do
-      {:ok, %{"block_data" => block_data, "proposer_sign" => signature}}
-      when is_map(block_data) and is_binary(signature) ->
+      {:ok, %{"block_data" => block_data, "proposer_sign" => signature}} ->
         Logger.info("Proponendo nuovo blocco: #{inspect(block_data)}")
         msg = {:pre_prepare, state.current_height, state.current_round, state.node_id, block_data, signature}
         broadcast_to_all(state.peers, msg)
