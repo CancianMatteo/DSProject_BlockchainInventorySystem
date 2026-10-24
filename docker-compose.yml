@@ -33,7 +33,7 @@ services:
       - ./Server_Python/.env 
     environment:
       - ELIXIR_HOST=node_a
-      - ELIXIR_HTTP_PORT=6001
+      - ELIXIR_HTTP_PORT=6000
     volumes:
       - bis_data_a:/data # volume univoco per il nodo A
     ports:
@@ -50,7 +50,7 @@ services:
       - NODE_ID=node_a
       - PYTHON_HOST=python_validator 
       - PYTHON_PORT=8000 
-      - ELIXIR_HTTP_PORT=6001
+      - ELIXIR_HTTP_PORT=6000
       - PEERS=node_b:4000,node_c:4000,node_d:4000
     depends_on:
       - python_validator_a
@@ -60,7 +60,7 @@ services:
       - cluster_network
     ports:
       - "4001:4000"
-      - "6001:6001"
+
 
 
  
@@ -75,7 +75,7 @@ services:
       - ./Server_Python/.env 
     environment:
       - ELIXIR_HOST=node_b
-      - ELIXIR_HTTP_PORT=6002
+      - ELIXIR_HTTP_PORT=6000
     volumes:
       - bis_data_b:/data # volume univoco per il nodo B
     ports:
@@ -86,13 +86,14 @@ services:
         aliases:
           - python_validator
 
+
   node_b:
     build: ./Server_MessagerNode
     environment:
       - NODE_ID=node_b
       - PYTHON_HOST=python_validator
       - PYTHON_PORT=8000 
-      - ELIXIR_HTTP_PORT=6002
+      - ELIXIR_HTTP_PORT=6000
       - PEERS=node_a:4000,node_c:4000,node_d:4000
     depends_on:
       - python_validator_b
@@ -102,7 +103,7 @@ services:
       - cluster_network
     ports:
       - "4002:4000"
-      - "6002:6002"
+
 
 
 
@@ -117,7 +118,7 @@ services:
       - ./Server_Python/.env 
     environment:
       - ELIXIR_HOST=node_c
-      - ELIXIR_HTTP_PORT=6003
+      - ELIXIR_HTTP_PORT=6000
     volumes:
       - bis_data_c:/data # volume univoco per il nodo C
     ports:
@@ -134,7 +135,7 @@ services:
       - NODE_ID=node_c
       - PYTHON_HOST=python_validator
       - PYTHON_PORT=8000
-      - ELIXIR_HTTP_PORT=6003
+      - ELIXIR_HTTP_PORT=6000
       - PEERS=node_a:4000,node_b:4000,node_d:4000
     depends_on:
       - python_validator_c
@@ -144,7 +145,7 @@ services:
       - cluster_network
     ports:
       - "4003:4000"
-      - "6003:6003"
+
 
 
 
@@ -159,7 +160,7 @@ services:
       - ./Server_Python/.env 
     environment:
       - ELIXIR_HOST=node_d
-      - ELIXIR_HTTP_PORT=6004
+      - ELIXIR_HTTP_PORT=6000
     volumes:
       - bis_data_d:/data # volume univoco per il nodo D
     ports:
@@ -176,7 +177,7 @@ services:
       - NODE_ID=node_d
       - PYTHON_HOST=python_validator
       - PYTHON_PORT=8000
-      - ELIXIR_HTTP_PORT=6004
+      - ELIXIR_HTTP_PORT=6000
       - PEERS=node_a:4000,node_b:4000,node_c:4000
     depends_on:
       - python_validator_d
@@ -186,5 +187,3 @@ services:
       - cluster_network
     ports:
       - "4004:4000"
-      - "6004:6004"
-      - cluster_network

@@ -7,8 +7,9 @@ defmodule InventoryNode.HTTPListener do
   Erlang-term wire protocol (`binary_to_term`) for intra-cluster gossip on
   port 4000. This listener binds the per-node simbehaviour port (default 4001;
   deployed as 6001..6004 via ELIXIR_HTTP_PORT) and handles
-  `POST /api/v1/simbehaviour` (mode forwarding from Python) plus the legacy
-  `POST /api/v1/python_call` echo used in transport checks.
+  `POST /api/v1/simbehaviour` (mode forwarding from Python) and
+  `POST /api/v1/python_call` (JSON payloads routed through
+  `InventoryNode.Router`).
 
   Port map per node: Python owns 8000 in its own container (clients AND
   Elixir share that one socket, routed by URL path), Elixir owns 4000
@@ -227,11 +228,12 @@ defmodule InventoryNode.HTTPListener do
 
   defp dispatch("/api/v1/python_call", _headers, body) do
     case JSON.decode(body) do
-      {:ok, payload} ->
-        # Minimal Python↔Elixir echo used to validate the HTTP/JSON transport.
-        # Real endpoints transparently mirror the Elixir→Python operation set and
-        # are backed by the `distributed_service` module.
-        {200, "OK", %{"received" => true, "flag" => payload["flag"] || "nil"}}
+      {:ok, payload} when is_map(payload) ->
+        InventoryNode.Router.handle_payload(payload)
+        {200, "OK", %{"ok" => true, "routed" => true}}
+
+      {:ok, _payload} ->
+        {400, "Bad Request", %{"error" => "expected a JSON object"}}
 
       {:error, _} ->
         {400, "Bad Request", %{"error" => "invalid JSON"}}
