@@ -257,7 +257,8 @@ def handle_cast({:pre_prepare, height, round, proposer_id, block_data, signature
       send(engine_pid, {:verified_pre_prepare, height, round, proposer_id, block_data, is_valid["status"]})
 
     end
-  end)
+  end
+
 
   # Questo è fondamentale: handle_cast deve finire ritornando {:noreply, state}
   {:noreply, state}
