@@ -24,13 +24,23 @@ defmodule InventoryNode.ClusterListener do
   end
 
   defp serve(client) do
+    # Modalità noresponse: la connessione viene accettata ma non processata.
+    if InventoryNode.SimBehaviour.get() == :noresponse do
+      :gen_tcp.close(client)
+      :ok
+    else
+      handle_connection(client)
+    end
+  end
+
+  defp handle_connection(client) do
     case :gen_tcp.recv(client, 0) do
       {:ok, data} ->
         payload = :erlang.binary_to_term(data, [:safe])
 
         InventoryNode.Router.handle_payload(payload)
 
-        serve(client)
+        handle_connection(client)
 
       {:error, _} -> :ok
     end

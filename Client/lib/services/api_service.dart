@@ -3,8 +3,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
-import 'package:myapp/config/app_flavor.dart';
-import 'package:myapp/models/api_response.dart';
+import 'package:distr_bis/config/app_flavor.dart';
+import 'package:distr_bis/models/api_response.dart';
 
 class ApiService {
   static DateTime? _lastChainTopRefreshAt;

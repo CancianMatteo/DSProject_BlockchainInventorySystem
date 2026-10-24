@@ -4,30 +4,28 @@ defmodule InventoryNode.Application do
 
   @impl true
   def start(_type, _args) do
-    my_id = System.get_env("NODE_ID")
-    is_byzantine = System.get_env("BYZANTINE_MODE") == "true"
-  engine_module =
-      if is_byzantine do
-        InventoryNode.ByzantineEngine
-      else
-        InventoryNode.ConsensusEngine
+    # Simulated behaviour faults are now a *runtime* mode
+    # (InventoryNode.SimBehaviour, set via POST /api/v1/simbehaviour/*), not a
+    # separate boot-time engine: there is a single ConsensusEngine whose
+    # broadcast/Router/Python behaviour is gated on the current mode.
+
+    cluster_port =
+      case System.get_env("ELIXIR_CLUSTER_PORT") do
+        nil -> 4000
+        "" -> 4000
+        value -> String.to_integer(value)
       end
 
-  cluster_map = File.read!("cluster.json")
-    |> Jason.decode!()
-
-  # Rimuovi te stesso dalla lista dei peer da contattare
-  peers = Map.delete(cluster_map, my_id)
     children = [
+      # Motore di consenso BFT-PoA
+      InventoryNode.ConsensusEngine,
 
-      # {InventoryNode.Worker, arg}
-      engine_module,
+      # Ascolta gli altri nodi Elixir in Erlang Binary (packet: 4 framing)
+      {InventoryNode.ClusterListener, cluster_port},
 
-      # Ascolta gli altri nodi Elixir in Erlang Binary
-    # HTTP listener per il backend Python
-     {InventoryNode.HTTPListener, []},
+      # HTTP listener per il backend Python
+      {InventoryNode.HTTPListener, []}
     ]
-
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options

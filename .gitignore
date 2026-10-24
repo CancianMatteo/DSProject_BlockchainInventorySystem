@@ -18,3 +18,4 @@ __pycache__
 .idea/
 *.flutter-plugins-dependencies
 build/
+*.dump

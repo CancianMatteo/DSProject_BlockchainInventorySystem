@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query
+from fastapi.params import Query as QueryParam
 from sqlalchemy.orm import Session
 
 from app.api.schemas import AddBlockRequest, CheckChainSyncRequest
@@ -15,6 +16,11 @@ def get_chain_history(
     before_n_block: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
 ):
+    # Supporta la chiamata diretta (test/unità) in cui i default sono Query(...).
+    if isinstance(limit, QueryParam):
+        limit = limit.default
+    if isinstance(before_n_block, QueryParam):
+        before_n_block = before_n_block.default
     rows = repositories.get_recent_blocks(
         db,
         limit=limit + 1,
@@ -24,7 +30,7 @@ def get_chain_history(
     blocks = rows[:limit]
     return {
         "ok": True,
-        "blocks": [sync_service.serialize_block(block) for block in blocks],
+        "blocks": [sync_service.serialize_block(db, block) for block in blocks],
         "has_more": has_more,
         "next_before_n_block": blocks[-1].n_block if has_more else None,
     }

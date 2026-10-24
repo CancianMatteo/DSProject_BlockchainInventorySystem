@@ -1,6 +1,6 @@
 {
-    "name": "myapp",
-    "short_name": "myapp",
+    "name": "distr_bis",
+    "short_name": "distr_bis",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

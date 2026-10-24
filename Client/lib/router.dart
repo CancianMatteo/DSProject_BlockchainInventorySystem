@@ -1,17 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart' hide Block;
-import 'package:myapp/auth/auth_provider.dart';
-import 'package:myapp/auth/forgot_password_screen.dart';
-import 'package:myapp/auth/login_screen.dart';
-import 'package:myapp/auth/reset_password_screen.dart';
-import 'package:myapp/models/block.dart';
-import 'package:myapp/chain/block_detail_screen.dart';
-import 'package:myapp/chain/chain_log_screen.dart';
-import 'package:myapp/inventory/inventory_screen.dart';
-import 'package:myapp/notifications/notification_provider.dart';
-import 'package:myapp/notifications/notifications_screen.dart';
-import 'package:myapp/profile/profile_screen.dart';
-import 'package:myapp/profile/users_management_screen.dart';
+import 'package:distr_bis/auth/auth_provider.dart';
+import 'package:distr_bis/auth/forgot_password_screen.dart';
+import 'package:distr_bis/auth/login_screen.dart';
+import 'package:distr_bis/auth/reset_password_screen.dart';
+import 'package:distr_bis/models/block.dart';
+import 'package:distr_bis/chain/block_detail_screen.dart';
+import 'package:distr_bis/chain/chain_log_screen.dart';
+import 'package:distr_bis/inventory/inventory_screen.dart';
+import 'package:distr_bis/notifications/notification_provider.dart';
+import 'package:distr_bis/notifications/notifications_screen.dart';
+import 'package:distr_bis/profile/profile_screen.dart';
+import 'package:distr_bis/profile/users_management_screen.dart';
 import 'package:provider/provider.dart';
 
 class AppRouter {

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:myapp/auth/auth_provider.dart';
-import 'package:myapp/services/api_service.dart';
+import 'package:distr_bis/auth/auth_provider.dart';
+import 'package:distr_bis/services/api_service.dart';
 import 'package:provider/provider.dart';
 
 class ProfileScreen extends StatefulWidget {

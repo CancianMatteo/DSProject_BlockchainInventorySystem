@@ -7,10 +7,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import (
+    BlockVote,
     ChainBlock,
     InAppNotification,
     PasswordResetAttemptCounter,
     PasswordResetOtp,
+    PendingTransaction,
     RevokedToken,
     User,
 )
@@ -155,6 +157,49 @@ def insert_block(
     db.add(row)
     db.flush()
     return row
+
+
+def get_pending_transaction(db: Session, tx_id: str) -> PendingTransaction | None:
+    return db.get(PendingTransaction, tx_id)
+
+
+def get_pending_transactions(db: Session) -> list[PendingTransaction]:
+    stmt = (
+        select(PendingTransaction)
+        .where(PendingTransaction.status == "pending")
+        .order_by(PendingTransaction.tx_id.asc())
+    )
+    return list(db.scalars(stmt))
+
+
+def add_block_vote(
+    db: Session,
+    *,
+    height: int,
+    round_number: int,
+    block_hash: str,
+    validator_id: str,
+    signature: str,
+) -> BlockVote:
+    vote = BlockVote(
+        height=height,
+        round=round_number,
+        block_hash=block_hash,
+        validator_id=validator_id,
+        signature=signature,
+    )
+    db.add(vote)
+    db.flush()
+    return vote
+
+
+def get_block_votes_for_hash(db: Session, block_hash: str) -> list[BlockVote]:
+    stmt = (
+        select(BlockVote)
+        .where(BlockVote.block_hash == block_hash)
+        .order_by(BlockVote.id.asc())
+    )
+    return list(db.scalars(stmt))
 
 
 def revoke_token(db: Session, jti: str) -> None:

@@ -472,10 +472,10 @@ end
   defp send_to_python_service(payload, py_host, py_port) do
     case :gen_tcp.connect(py_host, py_port, [:binary, active: false], 2000) do
       {:ok, socket} ->
-        :gen_tcp.send(socket, Jason.encode!(payload))
+        :gen_tcp.send(socket, JSON.encode!(payload))
         result = case :gen_tcp.recv(socket, 0, 2000) do
           {:ok, response_json} ->
-            case Jason.decode(response_json) do
+            case JSON.decode(response_json) do
               {:ok, parsed_response} -> parsed_response
               {:error, reason} ->
                 Logger.error("Errore nel parsing della risposta JSON dal servizio Python: #{inspect(reason)}")

@@ -3,17 +3,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: bis_api_server
-    # Keep private key permissions strict (e.g. 600) by matching host file owner.
-    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
-    ports:
-      - "${API_PUBLIC_PORT:-2900}:${API_PORT:-8000}"
-    volumes:
-      # Mappa il volume per la persistenza del DB SQLite
-      - bis_data:/data
     env_file:
       - .env
-    restart: unless-stopped
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    ports:
+      - "127.0.0.1:2900:8000"
+    volumes:
+      - bis_data:/data
 
 volumes:
   bis_data:

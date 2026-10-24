@@ -31,6 +31,9 @@ services:
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file:
       - ./Server_Python/.env 
+    environment:
+      - ELIXIR_HOST=node_a
+      - ELIXIR_HTTP_PORT=6001
     volumes:
       - bis_data_a:/data # volume univoco per il nodo A
     ports:
@@ -45,16 +48,19 @@ services:
     build: ./Server_MessagerNode
     environment:
       - NODE_ID=node_a
-      - BYZANTINE_MODE=false
       - PYTHON_HOST=python_validator 
       - PYTHON_PORT=8000 
-      - PEERS=node_b:4000,node_c:4000,node_d_byzantine:4000
+      - ELIXIR_HTTP_PORT=6001
+      - PEERS=node_b:4000,node_c:4000,node_d:4000
     depends_on:
       - python_validator_a
     restart: unless-stopped
     networks:
       - node_a_internal
       - cluster_network
+    ports:
+      - "4001:4000"
+      - "6001:6001"
 
 
  
@@ -67,6 +73,9 @@ services:
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file:
       - ./Server_Python/.env 
+    environment:
+      - ELIXIR_HOST=node_b
+      - ELIXIR_HTTP_PORT=6002
     volumes:
       - bis_data_b:/data # volume univoco per il nodo B
     ports:
@@ -81,16 +90,19 @@ services:
     build: ./Server_MessagerNode
     environment:
       - NODE_ID=node_b
-      - BYZANTINE_MODE=false
       - PYTHON_HOST=python_validator
       - PYTHON_PORT=8000 
-      - PEERS=node_a:4000,node_c:4000,node_d_byzantine:4000
+      - ELIXIR_HTTP_PORT=6002
+      - PEERS=node_a:4000,node_c:4000,node_d:4000
     depends_on:
       - python_validator_b
     restart: unless-stopped
     networks:
       - node_b_internal
       - cluster_network
+    ports:
+      - "4002:4000"
+      - "6002:6002"
 
 
 
@@ -103,6 +115,9 @@ services:
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file:
       - ./Server_Python/.env 
+    environment:
+      - ELIXIR_HOST=node_c
+      - ELIXIR_HTTP_PORT=6003
     volumes:
       - bis_data_c:/data # volume univoco per il nodo C
     ports:
@@ -117,20 +132,23 @@ services:
     build: ./Server_MessagerNode
     environment:
       - NODE_ID=node_c
-      - BYZANTINE_MODE=false
       - PYTHON_HOST=python_validator
       - PYTHON_PORT=8000
-      - PEERS=node_a:4000,node_b:4000,node_d_byzantine:4000
+      - ELIXIR_HTTP_PORT=6003
+      - PEERS=node_a:4000,node_b:4000,node_d:4000
     depends_on:
       - python_validator_c
     restart: unless-stopped
     networks:
       - node_c_internal
       - cluster_network
+    ports:
+      - "4003:4000"
+      - "6003:6003"
 
 
 
-  # NODO D (BIZANTINO)
+  # NODO D (fault injection via simbehaviour endpoints at runtime)
  
   python_validator_d:
     build: 
@@ -139,6 +157,9 @@ services:
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file:
       - ./Server_Python/.env 
+    environment:
+      - ELIXIR_HOST=node_d
+      - ELIXIR_HTTP_PORT=6004
     volumes:
       - bis_data_d:/data # volume univoco per il nodo D
     ports:
@@ -149,17 +170,21 @@ services:
         aliases:
           - python_validator
 
-  node_d_byzantine:
+  node_d:
     build: ./Server_MessagerNode
     environment:
-      - NODE_ID=node_d_byzantine
-      - BYZANTINE_MODE=true 
+      - NODE_ID=node_d
       - PYTHON_HOST=python_validator
       - PYTHON_PORT=8000
+      - ELIXIR_HTTP_PORT=6004
       - PEERS=node_a:4000,node_b:4000,node_c:4000
     depends_on:
       - python_validator_d
     restart: unless-stopped
     networks:
       - node_d_internal
+      - cluster_network
+    ports:
+      - "4004:4000"
+      - "6004:6004"
       - cluster_network

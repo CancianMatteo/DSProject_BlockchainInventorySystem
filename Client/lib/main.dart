@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:myapp/auth/auth_provider.dart';
-import 'package:myapp/notifications/notification_provider.dart';
-import 'package:myapp/router.dart';
+import 'package:distr_bis/auth/auth_provider.dart';
+import 'package:distr_bis/notifications/notification_provider.dart';
+import 'package:distr_bis/router.dart';
 import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
 
