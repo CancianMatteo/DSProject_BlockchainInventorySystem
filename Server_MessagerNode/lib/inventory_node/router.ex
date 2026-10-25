@@ -58,120 +58,127 @@ defmodule InventoryNode.Router do
     end
   end
 
-  defp do_handle_payload(payload, sim_mode) do
+  defp do_handle_payload(payload, _sim_mode) do
     python_host = python_host()
     python_port = python_port()
     peers = parse_peers(System.get_env("PEERS"))
 
     case payload do
+      # TRANSACTION OPERATION
+      %{"flag" => "transaction"} = transaction ->
+        IO.puts(
+          "Richiesta di transazione: #{Map.get(transaction, "quantity")} unità " <>
+            "dell'oggetto #{Map.get(transaction, "item_id")} nel magazzino " <>
+            "#{Map.get(transaction, "location")}"
+        )
 
-       # TRANSACTION OPERATION
-    %{
-      "flag" => "transaction",
-      "from_node" => from_node,
-      "tx_type" => tx_type,
-      "item_id" => item_id,
-      "quantity" => quantity,
-      "location" => location,
-      "timestamp" => timestamp,
-      "tx_id" => tx_id
-    } ->
-        IO.puts("richiesta di transazione: #{quantity} unità dell'oggetto #{item_id} nel magazzino #{location}")
-        # logica da gestere in mempool python
-        transaction = send_to_python_service(%{
-          "flag" => "transaction",
-          "from_node" => from_node,
-          "tx_type" => tx_type,
-          "item_id" => item_id,
-          "quantity" => quantity,
-          "location" => location,
-          "timestamp" => timestamp,
-          "tx_id" => tx_id
-        }, python_host, python_port)
+        relay_node = Map.get(transaction, "relay_node")
+        python_transaction = Map.delete(transaction, "relay_node")
+        result = send_to_python_service(python_transaction, python_host, python_port)
 
-        case transaction do
+        case result do
           {:ok, tx} ->
             my_id = node_id()
-            # Inonda la transazione solo se proviene da un nodo esterno a questo
-            # gruppo E la mempool Python l'ha effettivamente inserita (il campo
-            # "duplicate" impedisce i loop di re-inoltro tra i nodi).
-            # In modalità bizantine il nodo non condivide con gli altri nodi
-            # le transazioni ricevute dai client.
-            if sim_mode != :bizantine and tx["duplicate"] != true and tx["from_node"] != my_id and tx["from_node"] not in Map.keys(peers) do
-              tx2 = tx |> Map.put("from_node", my_id) |> Map.delete("duplicate")
-              broadcast_to_peers(peers, tx2)
+            # relay_node non è firmato e viene rimosso prima dell'invio a Python.
+            if tx["duplicate"] != true and relay_node not in Map.keys(peers) do
+              broadcast_to_peers(peers, Map.put(python_transaction, "relay_node", my_id))
             end
 
           {:error, reason} ->
             Logger.error("Invio transazione a Python fallito: #{inspect(reason)}")
         end
 
+      # KEYS SETUP OPERATION
+      {:setup_keys} ->
+        IO.puts("Setup delle chiavi pubbliche e private per la crittografia")
 
-       # KEYS SETUP OPERATION
-    {:setup_keys} ->
-      IO.puts("Setup delle chiavi pubbliche e private per la crittografia")
-      case send_to_python_service(%{"flag" => "setup_keys", "from_node" => node_id()}, python_host, python_port) do
-        {:ok, %{"flag" => "setup_keys", "pub_key" => pub_key}} ->
+        case send_to_python_service(
+               %{"flag" => "setup_keys", "from_node" => node_id()},
+               python_host,
+               python_port
+             ) do
+          {:ok, %{"flag" => "setup_keys", "pub_key" => pub_key}} ->
             broadcast_to_peers(peers, {:setup_keys_warning, node_id(), pub_key})
 
-        {:ok, %{"flag" => "error", "reason" => reason}} ->
-              {:error, reason}
+          {:ok, %{"flag" => "error", "reason" => reason}} ->
+            {:error, reason}
 
-        {:ok, _} ->
-              {:error, "Risposta Python malformata"}
+          {:ok, _} ->
+            {:error, "Risposta Python malformata"}
 
-        {:error, reason} ->
-              {:error, reason}
-      end
+          {:error, reason} ->
+            {:error, reason}
+        end
 
-        # KEYS SETUP WARNING OPERATION
-    {:setup_keys_warning, from_node, pub_key} ->
-      IO.puts("Ricevuto avviso di setup chiavi da #{inspect(from_node)}")
-      case send_to_python_service(%{"flag" => "setup_keys_warning", "from_node" => to_string(from_node), "pub_key" => pub_key}, python_host, python_port) do
-        {:ok, %{"flag" => "setup_keys_warning", "status" => "success"}} ->
-          IO.puts("Chiave pubblica del nodo #{inspect(from_node)} registrata correttamente.")
+      # KEYS SETUP WARNING OPERATION
+      {:setup_keys_warning, from_node, pub_key} ->
+        IO.puts("Ricevuto avviso di setup chiavi da #{inspect(from_node)}")
 
-        {:ok, %{"flag" => "error", "reason" => reason}} ->
-              {:error, reason}
+        case send_to_python_service(
+               %{
+                 "flag" => "setup_keys_warning",
+                 "from_node" => to_string(from_node),
+                 "pub_key" => pub_key
+               },
+               python_host,
+               python_port
+             ) do
+          {:ok, %{"flag" => "setup_keys_warning", "status" => "success"}} ->
+            IO.puts("Chiave pubblica del nodo #{inspect(from_node)} registrata correttamente.")
 
-        {:ok, _} ->
-              {:error, "Risposta Python malformata"}
+          {:ok, %{"flag" => "error", "reason" => reason}} ->
+            {:error, reason}
 
-        {:error, reason} ->
-              {:error, reason}
-      end
+          {:ok, _} ->
+            {:error, "Risposta Python malformata"}
 
+          {:error, reason} ->
+            {:error, reason}
+        end
 
-     # ROUND CHANGE OPERATION
-    {:round_change, round_payload} ->
-      GenServer.cast(InventoryNode.ConsensusEngine, {:round_change, round_payload})
+      # ROUND CHANGE OPERATION
+      {:round_change, round_payload} ->
+        GenServer.cast(InventoryNode.ConsensusEngine, {:round_change, round_payload})
 
+      # CONSENSUS OPERATIONS
+      {:pre_prepare, height, round, proposer_id, block_data, signature} ->
+        GenServer.cast(
+          InventoryNode.ConsensusEngine,
+          {:pre_prepare, height, round, proposer_id, block_data, signature}
+        )
 
-     # CONSENSUS OPERATIONS
-    {:pre_prepare, height, round, proposer_id, block_data, signature} ->
-      GenServer.cast(InventoryNode.ConsensusEngine, {:pre_prepare, height, round, proposer_id, block_data, signature})
+      {:prepare_vote, height, round, block_hash, validator_id, signature} ->
+        GenServer.cast(
+          InventoryNode.ConsensusEngine,
+          {:prepare_vote, height, round, block_hash, validator_id, signature}
+        )
 
+      {:commit_proposal, height, round, proposer_id, block_data, proposer_signature, signatures} ->
+        GenServer.cast(
+          InventoryNode.ConsensusEngine,
+          {:commit_proposal, height, round, proposer_id, block_data, proposer_signature,
+           signatures}
+        )
 
-    {:prepare, height, round, validator_id, signature} ->
-      GenServer.cast(InventoryNode.ConsensusEngine, {:prepare, height, round, validator_id, signature})
+      {:commit_vote, height, round, proposer_id, block_data, proposer_signature,
+       prepare_signatures, block_hash, validator_id, signature} ->
+        GenServer.cast(
+          InventoryNode.ConsensusEngine,
+          {:commit_vote, height, round, proposer_id, block_data, proposer_signature,
+           prepare_signatures, block_hash, validator_id, signature}
+        )
 
-
-    {:commit, height, round, validator_id, signature} ->
-      GenServer.cast(InventoryNode.ConsensusEngine, {:commit, height, round, validator_id, signature})
-
-
-   #CATCH ALL
-  other ->
-     IO.puts("Payload non riconosciuto: #{inspect(other)}")
-   end
- end
+      # CATCH ALL
+      other ->
+        IO.puts("Payload non riconosciuto: #{inspect(other)}")
+    end
+  end
 
   # Funzioni di supporto
 
   defp send_to_python_service(payload, py_host, py_port) do
     InventoryNode.PythonClient.call(payload, py_host, py_port)
   end
-
 
   defp broadcast_to_peers(peers, message) do
     case InventoryNode.SimBehaviour.get() do
@@ -180,12 +187,7 @@ defmodule InventoryNode.Router do
         :ok
 
       :bizantine ->
-        # In modalità bizantine il Router non inoltra transazioni ai peer.
-        if match?(%{"flag" => "transaction"}, message) do
-          :ok
-        else
-          do_broadcast_to_peers(peers, message)
-        end
+        do_broadcast_to_peers(peers, message)
 
       _ ->
         do_broadcast_to_peers(peers, message)
@@ -194,6 +196,7 @@ defmodule InventoryNode.Router do
 
   defp do_broadcast_to_peers(peers, message) do
     data = :erlang.term_to_binary(message)
+
     Enum.each(peers, fn {peer_id, {host, port}} ->
       case Task.start(fn -> send_tcp(peer_id, host, port, data) end) do
         {:ok, _pid} ->
@@ -216,7 +219,9 @@ defmodule InventoryNode.Router do
         :gen_tcp.close(socket)
 
         case result do
-          :ok -> :ok
+          :ok ->
+            :ok
+
           {:error, reason} ->
             Logger.warning("Invio del messaggio al peer #{peer_id} fallito: #{inspect(reason)}")
         end
@@ -225,5 +230,4 @@ defmodule InventoryNode.Router do
         Logger.warning("Connessione al peer #{peer_id} fallita: #{inspect(reason)}")
     end
   end
-
 end

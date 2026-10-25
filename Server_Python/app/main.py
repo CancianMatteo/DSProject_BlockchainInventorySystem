@@ -82,8 +82,9 @@ async def simbehaviour_gate(request: Request, call_next):
       every client-facing endpoint with 503;
     * ``noresponse`` - answer only health/simbehaviour, reject everything
       else (including intra-cluster ``python_call``) with 503;
-    * ``bizantine``  - requests are served but their content is forged
-      (see ``distributed_service``); no blocking here.
+    * ``bizantine``  - requests are served normally; transaction handling is
+      unchanged, while ``BIZANTINE_SCENARIO`` controls consensus fault
+      injection (see ``distributed_service``).
     """
     rel = _relative_path(request.url.path)
     if request.method != "OPTIONS" and rel.startswith("/"):

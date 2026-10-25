@@ -1,258 +1,317 @@
-# Dettagli Implementativi: Router e Struttura Transazioni (Elixir)
+# Specifiche tecniche: gossip e consenso PoA-BFT
 
-Questo documento definisce i dettagli implementativi per la gestione delle transazioni nel sistema di inventario basato su blockchain permissioned[cite: 1], prendendo spunto dall'implementazione corrente in Elixir. In particolare, si concentra sulla struttura JSON dei payload inviati dai client al backend, gestiti dai listener del livello di rete.
+Questo documento descrive il flusso effettivamente implementato dai nodi
+Elixir e i contratti JSON dell'endpoint Python interno. Elixir gestisce rete,
+round, proposer e quorum; Python gestisce mempool, hash e operazioni
+crittografiche.
 
-## Contesto Architetturale
+## Componenti e trasporto
 
-Come illustrato nell'immagine "image_fcef1b.png"[cite: 1], il sistema Elixir funge da interfaccia di rete (Server Interface)[cite: 1]. Nello specifico, il modulo `ClusterListener` (visibile nello screenshot) si occupa di ascoltare le comunicazioni intra-cluster (tra i nodi validatori) sulla porta dedicata 4000, decodificando i messaggi binari tramite `:erlang.binary_to_term` e inoltrandoli a `InventoryNode.Router.handle_payload`[cite: 1]. Non esiste un `ClientListener` Elixir: le richieste dei client arrivano al backend Python (porta 8000), che dialoga con il motore Elixir solo via `POST /api/v1/python_call` (Elixir→Python) e `POST /api/v1/simbehaviour` (Python→Elixir, porta interna 6001).
+- Il backend Python espone l'API client e `POST /api/v1/python_call` sulla
+  porta container `8000`. Il deploy espone le porte host `8001`-`8004`, come
+  descritto in [PORTS.md](./PORTS.md).
+- `InventoryNode.PythonClient` invia al servizio Python un oggetto JSON e
+  restituisce a Elixir la mappa JSON ricevuta; in caso di HTTP non riuscito o
+  risposta JSON malformata restituisce `{:error, reason}`.
+- `ClusterListener` riceve messaggi tra nodi come termini Erlang con framing
+  `packet: 4`; `InventoryNode.Router` li inoltra al motore di consenso.
+- Non viene usato un listener Elixir per i client: i client parlano con
+  l'API Python. Le porte interne degli altri listener sono configurate nel
+  deploy e riepilogate in [PORTS.md](./PORTS.md).
 
-Il modulo `InventoryNode.Router` analizzato funge da dispatcher, inoltrando le richieste (come le transazioni o il setup delle chiavi) al servizio Python (che gestirà la Mempool e la logica di consenso BFT).
+## Identità, chiavi e serializzazione
 
-## Struttura del Payload JSON per le Transazioni
+Le chiavi pubbliche dei validatori devono essere disponibili al servizio
+Python nel registro dei validatori (`VALIDATOR_PUBLIC_KEYS`) oppure tramite
+`setup_keys_warning`. Una chiave configurata ha precedenza su una chiave
+ricevuta dinamicamente. Il `validator_id` usato dal nodo deve coincidere con
+l'identità associata alla chiave pubblica.
 
-Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requisiti del progetto (FR-1, FR-2, FR-3), quando un client (nodo operatore) invia una transazione al backend python del nodo x (in ascolto sulla porta 8000, mappata sulla 800x dal deploy), il payload JSON deve rispettare la seguente struttura:
+Python serializza i contenuti firmati in JSON canonico (chiavi ordinate e
+separatori deterministici) e usa firme Ed25519 codificate in Base64. Il
+`block_hash` è SHA-256 del contenuto canonico del blocco. Le firme della
+proposta e dei voti PREPARE sono distinte: la prima prova chi ha proposto il
+blocco, le seconde costituiscono il certificato di quorum.
 
-## Mappa delle porte (nessun conflitto)
+## Sequenza PoA-BFT modificata
 
-Ogni nodo logico è composto da due container che condividono l'IP del nodo
-ma espongono porte diverse, quindi non serve sdoppiare nulla:
+I validatori sono ordinati per ID in modo lessicografico, sia in Elixir sia
+in Python. Per un'altezza `height` e un round `round`, il proposer atteso è
+`validators[(height + round) mod numero_validatori]`. Con `N = 3f + 1`, il
+quorum è `2f + 1`.
 
-- backend Python: porta **8000** nel container (client esterni E motore
-  Elixir sullo stesso socket: FastAPI distingue per path `/api/v1/...` vs
-  `/api/v1/python_call`, non servono due porte). Il deploy pubblica
-  8001/8002/8003/8004 sugli host per i nodi a/b/c/d.
-- Elixir `ClusterListener`: porta **4000** (gossip intra-cluster in
-  Erlang-term, framing `packet: 4`). Il deploy pubblica 4001..4004 (porte interne al cluster Docker, nessuna esposizione host).
-- Elixir `HTTPListener`: porta **6001 internal** (solo forwarding
-  `POST /api/v1/simbehaviour` da Python verso Elixir, mai esposta all'esterno).
+### 1. Avvio del round e PRE-PREPARE
 
-In particolare NON esiste alcun `ClientListener` Elixir e l'immagine Elixir
-non lega mai la 8000 (il vecchio `EXPOSE 8000` nel Dockerfile era un
-refuso, ora corretto: i numeri di porta 4000 e 6000 sono ora solo interni al container (nessuna esposizione EXPOSE nel Dockerfile, comunicazione solo tramite rete Docker networking interno).
+1. Elixir avvia il timer del round e calcola il proposer.
+2. Se è il proposer, chiede a Python di preparare un blocco.
+3. Python costruisce il blocco dalla mempool, lo firma come proposer e
+   restituisce blocco e firma.
+4. Prima di inviare la proposta, il proposer chiede a Python anche la propria
+   firma PREPARE. Poi invia il messaggio `pre_prepare` a tutti i peer e conserva
+   la firma PREPARE locale.
+5. Ogni nodo chiede a Python di verificare hash, firma del proposer e scelta
+   deterministica del proposer. Se la proposta è valida, firma PREPARE e
+   invia il voto **unicast** al proposer.
 
+### 2. PREPARE: raccolta del quorum di preparazione
 
-## API Python deve gestire i seguenti messaggi:
+Il proposer verifica ogni voto PREPARE con Python e lo registra una sola volta
+per `validator_id`. Ogni firma è legata a `height`, `round` e `block_hash`,
+quindi non può essere riutilizzata per un blocco diverso. Al raggiungimento di
+`2f + 1` firme PREPARE, il proposer invia a tutti i nodi una
+`commit_proposal` con il blocco, la firma del proposer e il certificato
+PREPARE. Questa proposta apre una nuova votazione: **non scrive il blocco**.
 
--JSON di forma {
-  "flag": "transaction",
-  "from_node": "string" (client),
-  "tx_type": "string",
-  "item_id": "string",
-  "quantity": "int",
-  "location": "string",
-  "timestamp": "string",
-  "tx_id": "string",
-} Le transazioni ricevute sono solo da mettere in una lista (o meglio ancora un set) di 'transazioni pendenti'. Queste poi vengono rimosse quando un blocco proposto e CONFERMATO viene scritto nella blockchain.
+Ogni destinatario chiede a Python di verificare la firma del proposer, il
+blocco e tutte le firme PREPARE del certificato. Solo se il certificato
+contiene almeno `2f + 1` voti distinti e validi, il nodo partecipa alla fase
+COMMIT e firma il proprio voto COMMIT. Un certificato PREPARE valido è quindi
+la condizione per votare COMMIT, non il quorum finale di scrittura.
 
-- JSON di forma {flag: "setup_keys", from_node: Node.self()}: deve generare chiave pubblica e privata del nodo richiedente e salvarle per le future firme, ritornando a questo messaggio un JSON {"flag": "setup_keys", "pub_key": pub_key}. Inoltre deve essere presente un dizionario con le chiavi pubbliche degli altri peers (nodo_A: pubkey_a)
+Un nodo che non aveva ricevuto il `pre_prepare` può apprendere la proposta
+attraverso un voto COMMIT: il voto porta anche il blocco, la firma del
+proposer e il certificato PREPARE. Il ricevente verifica la prova, adotta la
+proposta e vota COMMIT una sola volta per altezza e round. Questo recupera il
+caso in cui il proposer invia `commit_proposal` solo a una parte dei peer.
 
-- JSON di forma {flag: "setup_keys_warning", from_node: from_node, pub_key: pub_key}: ricevi la chiave pubblica di un'altro nodo appena acceso e si deve registrare nel dizionario di chiavi pubbliche degli altri nodi. Deve restituire un JSON {"flag" => "setup_keys_warning", "status" => "success"}.
+### 3. COMMIT: votazione e scrittura
 
+Ogni validatore che accetta la `commit_proposal` firma un voto COMMIT legato
+a `height`, `round`, `validator_id` e `block_hash`, poi lo invia a tutti i
+peer. Ogni nodo, compreso il proposer, verifica individualmente le firme
+ricevute con Python e conta al massimo un voto per validatore. Ogni voto
+COMMIT include anche la proposta firmata e il certificato PREPARE, così che
+un nodo non informato possa verificarli prima di partecipare alla votazione.
 
-- JSON di forma {flag: "prepare_block", node_id: Node.self() (string) , current_height: current_height (int)}: prepara un blocco della block chain e restituisce un json di forma:
-{"block_data":
-  {"hash": "0x8f4b2c9a...e31d",
-  "header": {
-    "height": 101,
-    "previous_hash": "0x3a1b...99df",
-    "timestamp": 1696322400,
-    "proposer": "0xValidatorC_Address",
-    "round": 1,
-    "transactions_root": "0x7c4e...11bb",
-    "state_root": "0x9d2a...55cc",
-  },
-  "transactions": [
-    {
-  "flag": "transaction",
-  "from_node": "string" (client),
-  "tx_type": "string",
-  "item_id": "string",
-  "quantity": "int",
-  "location": "string",
-  "timestamp": "string",
-  "tx_id": "string",
-} 
-  ]
-},
-"proposer_sign": "(signature_proposer)"
-}
+Un nodo scrive il blocco solo quando ha raccolto almeno `2f + 1` voti COMMIT
+distinti e validi per lo stesso blocco. La scrittura avviene localmente su
+Python; il nodo avanza all'altezza successiva solo dopo la risposta positiva
+di `write_block`. Non è sufficiente ricevere la `commit_proposal` o il quorum
+PREPARE.
 
-- JSON di forma {
-      "flag" => "round_change",
-      "height" => state.current_height,
-      "target_round" => target_round,
-      "validator_id" => state.node_id,
-      "signature" => nil
-    } : Bisogna semplicemente aggiungere la firma del nodo che lo richiede e ritornare lo stesso JSON ma con la firma
+Una volta iniziata la votazione COMMIT, un timeout non cancella la proposta
+né avvia un round incompatibile: il nodo continua ad attendere i voti,
+secondo l'ipotesi di consegna eventuale dei messaggi. Il `ROUND_CHANGE` per
+timeout si usa quando la fase COMMIT non è ancora iniziata.
 
+### 4. ROUND_CHANGE
 
-- JSON di forma {"flag" => "pre_prepare_conflict",
- "height" => height, 
- "round" => round, 
- "proposer_id"=>proposer_id,
-  "block_data" => block_data, 
-  "signature" =>signature,
-  "conflicting_block"=> state.pending_block,
-"conflicting_signature" => state.temporary_signature
-  } : Dovresti verificare che 'block_data' e la sua 'signature' corrispondano a quelli del leader che la proppone 'proposer_id', lo stesso per "conflicting_block" e "conflicting_signature". Se entrambi sono firmati da 'proposer_id' e i blocchi sono diversi allora restituisci un JSON con {"status": boolean, "proof": JSON} con "status" = true se il leader ha proposto effettivamente due blocchi diversi (bizantino), false altrimenti. La firma del nodo che sta controllando deve firmare: proof_da_firmare = %{
-  "flag" => "pre_prepare_conflict",
-  "height" => height,
-  "round" => round,
-  "validator_id" => my_node_id,
-  "hash_1" => crypto_hash(block_data),
-  "hash_2" => crypto_hash(conflicting_block) }
-  
-   mentre 'proof' sarà fatto come: 
-  {
-  "flag": "pre_prepare_conflict_proof",
-  "height": 1054,
-  "round": 3,
-  "proposer_id": "node_1",
-  "validator_id": "node_5",
-  "forged_header": {
-    "previous_block_hash": "...",
-    "transactions_root": "0xaaa...",
-    "state_root": "..."
-  },
-  "forged_signature": "0x_firma_leader_su_forged_header",
-  "conflicting_header": {
-    "previous_block_hash": "...",
-    "transactions_root": "0xbbb...",
-    "state_root": "..."
-  },
-  "conflicting_signature": "0x_firma_leader_su_conflicting_header",
-  "validator_signature": "0x_firma_del_nodo_5_sul_payload_di_accusa"
-}   in questo modo non peserà tanti byte l'invio di dati
+Un timeout o una prova valida di doppia proposta avvia il passaggio al round
+successivo. Ogni nodo conta al massimo un voto per validatore e round target;
+il nuovo round parte al raggiungimento del quorum.
 
+- **Timeout:** il nodo chiede a Python di firmare il proprio `ROUND_CHANGE`.
+- **Equivocazione:** il nodo invia a Python due hash e le firme del proposer.
+  Se il proposer ha firmato entrambi gli hash diversi per la stessa altezza e
+  round, Python produce una prova compatta firmata dal validatore accusatore.
+  La prova contiene hash e firme, non i blocchi completi.
+- I peer verificano la firma del timeout oppure, per l'equivocazione, le due
+  firme del proposer e la firma dell'accusatore prima di contare il voto.
 
+## Contratto JSON di `POST /api/v1/python_call`
 
+Ogni richiesta è un singolo oggetto JSON con il campo `flag`. Le risposte
+indicate sono oggetti JSON. Gli errori di input o di servizio devono essere
+restituiti come HTTP non-2xx con un messaggio d'errore, non come successo
+fittizio.
 
-- Se riceve invece il JSON precedente, ovvero: {
-  "flag": "pre_prepare_conflict_proof",
-  "height": 1054,
-  "round": 3,
-  "proposer_id": "node_1",
-  "validator_id": "node_5",
-  "forged_header": {
-    "previous_block_hash": "...",
-    "transactions_root": "0xaaa...",
-    "state_root": "..."
-  },
-  "forged_signature": "0x_firma_leader_su_forged_header",
-  "conflicting_header": {
-    "previous_block_hash": "...",
-    "transactions_root": "0xbbb...",
-    "state_root": "..."
-  },
-  "conflicting_signature": "0x_firma_leader_su_conflicting_header",
-  "validator_signature": "0x_firma_del_nodo_5_sul_payload_di_accusa"
-}   Il nodo deve: 
-1) Calcolo degli Hash degli Header (Verifica della Diversità)
-Serializza in formato canonico e deterministico forged_header e conflicting_header. Applica la funzione di hash del tuo protocollo (es. SHA-256, Keccak256) su entrambi gli oggetti.
-Azione crittografica: Calcola hash_forged = Hash(Serialize(forged_header)) e hash_conflicting = Hash(Serialize(conflicting_header)).
-Controllo: Verifica che hash_forged != hash_conflicting. Se sono uguali, i blocchi sono identici e non c'è nessuna doppia proposta.
-
-2) Verifica delle Firme del Leader (Equivocation Check)
-Recupera la chiave pubblica associata a proposer_id dal registro dei validatori corrente.
-Azione crittografica:
-
-Esegui VerifySignature(pub_key_proposer, hash_forged, forged_signature).
-
-Esegui VerifySignature(pub_key_proposer, hash_conflicting, conflicting_signature).
-
-3) Verifica della Firma dell'Accusatore (Autenticità dell'accusa)
-Ricostruisci il payload dell'accusa esattamente come lo ha costruito il nodo 5 prima di inviarlo, per assicurarti che il nodo 5 si stia assumendo la responsabilità del messaggio.
-Azione crittografica:
-
-Ricrea la struttura dati: payload = { "flag": "pre_prepare_conflict", "height": 1054, "round": 3, "validator_id": "node_5", "hash_1": hash_forged, "hash_2": hash_conflicting }.
-
-Calcola hash_payload = Hash(Serialize(payload)).
-
-Recupera la chiave pubblica di validator_id e verifica VerifySignature(pub_key_validator, hash_payload, validator_signature)
-
-
-
-
-
-
-DUE TIPI DI ROUND CHANGE (timeout e doppia proposta di blocchi diversi):
-- JSON di forma {
-      "flag" => "timeout",
-      "height" => state.current_height,
-      "target_round" => target_round,
-      "validator_id" => state.node_id,
-      "signature" => signature
-    } : in questo caso bisogna verificare la 'signature' del nodo "validator_id" con la sua chiave pubblica, ritornando un JSON con {"status": true} o {"status": false}
-
-- JSON di forma  {
-      "flag" => "pre_prepare_conflict",
-      "height" => height,
-      "target_round" => round + 1,
-      "validator_id" => state.node_id,
-      "conflicting_block_hash" => state.pending_block["hash"], 
-      "conflicting_signature" => state.temporary_signature,
-      "forged_block_hash" => block_data["hash"],
-      "forged_signature" => signature,
-      validator_signature: proof["validator_signature"]
-            } : Dovresti verificare che 'block_data' e la sua 'signature' corrispondano a quelli del leader che la proppone 'proposer_id', lo stesso per "conflicting_block" e "conflicting_signature". Se entrambi sono firmati da 'proposer_id' e i blocchi sono diversi allora restituisci un JSON con {"status": boolean, "validator_signature": String}. Verifica anche la firma del validatore con la sua chiave pubblica sulla proof (proof è "validator_id","block_data","signature","conflicting_block","conflicting_signature")
-
-- JSON di forma 
-
-
-
-- JSON di forma {"flag" => "pre_prepare",
- "height" => height,
-  "round" => round,
-   "proposer_id"=>proposer_id,
-    "block_data" => block_data,
-     "signature" =>signature} : verifica la signature fatta per il 'proposer_id' per il 'block_data' usando la sua chiave pubblica, restituisce un JSON {"is_valid": boolean} 
-
-
-- JSON di forma {"flag" => "prepare", 
-"height" => height,
- "round" => round,
-  "validator_id" => state.node_id,
-   "block_data" => block_data} : firma il 'block_data' con la chiave privata del nodo che lo richiede e restituisci un JSON {"signature" : signature} 
-
-- JSON di forma {"flag" => "verified_prepare",
-                  "height" => height, 
-                  "round" => round, 
-                  "validator_id" => validator_id, 
-                  "signature" => signature} : verifica la firma 'signature' con la chiave pubblica del 'validator_id' e ritorna un JSON del tipo {"status": boolean} con 'true' se corrisponde la firma o 'false' altrimenti
-              
-- JSON di forma {"flag" => "commit", 
-                  "height" => height, 
-                  "round" => round,
-                  "validator_id" => state.node_id} : restituisci un JSON {"signature" : signature} del nodo 'validator_id'
-
-
-- JSON di forma {"flag" => "verified_commit", 
-                  "height" => height,
-                  "round" => round,
-                    "validator_id" => validator_id,
-                    "signature" => signature} : verifica la firma 'signature' con la chiave pubblica del 'validator_id' e ritorna un JSON del tipo {"status": boolean} con 'true' se corrisponde la firma o 'false' altrimenti
-
-- JSON di forma {"flag" => "write_block", 
-                  "height" => height,
-                  "block_data" => state.pending_block} : scrivi il blocco "block_data" definitivamente sulla blockchain e restituisci un JSON {"status": boolean} con 'true' se il blocco è stato scritto correttamente o 'false' altrimenti
-
-                  
-- Ho fatto il merging del docker compose impostando i nodi python come erano impostati nel docker compose dentro Server_backend. è da modificare probabilmente la porta con cui il client comunicherà con il Server_backend (scegli una tra 8001,8002,8003,8004)
-
-## File Documentation Cross-Reference
-
-| Topic | Document | Location |
+| `flag` richiesta | Operazione Python | Risposta attesa |
 |---|---|---|
-| Python API ports (host mapping) | PORTS.md | Host ports 8001-8004 → 8000 |
-| Python API ports (client config) | specifiche_tecniche.md | Line 236: choose from 8001-8004 |
-| Elixir cluster gossip port | specifiche_tecniche.md | Line 25: port 4000, internal only |
-| Elixir simbehaviour listener | PORTS.md | Port 6000 internal, host 6001-6004 for testing |
-| Docker port exposure | backend_blueprint.md | Line 61: 4001-4004 internal-only note |
-| ELIXIR_HTTP_PORT env var | backend_blueprint.md | Line 611: no host exposure |
-| Dockerfile EXPOSE | specifiche_tecniche.md | Line 31: 4000/6000 internal only |
+| `setup_keys` | Restituire la chiave pubblica locale; la chiave privata resta locale al servizio. | `{"flag":"setup_keys","pub_key":"<base64>"}` |
+| `setup_keys_warning` | Validare e registrare la chiave pubblica del peer. | `{"flag":"setup_keys_warning","status":"success"}` |
+| `transaction` | Validare la firma del client, validare la transazione e inserirla idempotentemente nella mempool. Non alterare i campi firmati. | Transazione ricevuta con `status` e `duplicate`. |
+| `prepare_block` | Ordinare le transazioni pendenti e preparare il blocco successivo per il round richiesto. Firmare la coppia altezza/round/proposer/hash. | `{"flag":"prepare_block","block_data":{...},"proposer_sign":"<base64>"}`; se la mempool è vuota `block_data` è `null`. |
+| `pre_prepare` | Verificare il blocco, il suo hash, il proposer atteso e la firma della proposta. | `{"status":true}` oppure `{"status":false}`. |
+| `prepare` | Firmare un voto PREPARE legato a fase, altezza, round, validator e hash del blocco. | `{"flag":"prepare","signature":"<base64>"}`. |
+| `verified_prepare` | Verificare il voto PREPARE usando la chiave pubblica del `validator_id` e il `block_hash` atteso. | `{"status":true}` oppure `{"status":false}`. |
+| `commit_proposal` | Verificare la proposta e il certificato PREPARE: firme valide, validator distinti e quorum `2f+1`. Non scrivere il blocco in questa fase. | `{"status":true}` oppure `{"status":false}`. |
+| `commit` | Firmare il voto COMMIT locale, legato a fase, altezza, round, validator e hash del blocco. | `{"flag":"commit","signature":"<base64>"}`. |
+| `verified_commit` | Verificare la firma di un voto COMMIT per il relativo hash del blocco. Elixir conta i voti validi e applica il quorum. | `{"status":true}` oppure `{"status":false}`. |
+| `write_block` | Verificare che il blocco estenda la testa corrente, salvarlo e rimuovere dalla mempool le transazioni confermate. | `{"status":true}` oppure errore HTTP/non-successo. |
+| `round_change` | Firmare il payload di cambio round, inclusi `height`, `target_round`, `validator_id` e motivo. | Lo stesso payload con `signature`. |
+| `verified_round_change` | Verificare la firma del timeout oppure la prova compatta di doppia proposta. | `{"status":true}` oppure `{"status":false}`. |
+| `pre_prepare_conflict` | Verificare le due firme del proposer su hash distinti e creare una prova firmata dall'accusatore. | `{"status":true,"proof":{...}}`; in assenza di prova `{"status":false,"proof":null}`. |
 
-  
+Con `BIZANTINE_SCENARIO=equivocation`, la risposta `prepare_block` include
+anche `equivocation_block_data` e `equivocation_sign`: sono un secondo blocco
+con lo stesso height, round e parent, ma con un sottoinsieme distinto delle
+transazioni, e la relativa firma del proposer. Entrambe le proposte devono
+essere firmate con la chiave privata locale; non si usano firme contraffatte
+per simulare l'equivocation.
 
+### Campi e contenuti firmati
 
+**`prepare_block`**
 
+Richiesta:
 
+```json
+{
+  "flag": "prepare_block",
+  "node_id": "node_a",
+  "current_height": 1,
+  "round": 0
+}
+```
+
+Python determina l'altezza successiva dalla propria testa persistita (il
+campo `current_height` è informativo), usa `round` nel blocco e restituisce
+un `block_data` compatibile con la struttura corrente: `height`, `round`,
+`prev_block_hash`, `transactions` e `block_hash`. Se non ci sono transazioni,
+restituisce `block_data: null`.
+
+La firma del proposer copre `{height, round, proposer_id, block_hash}`.
+`pre_prepare` riceve questi campi più `block_data` e `signature`.
+
+**Voto PREPARE**
+
+Richiesta di firma:
+
+```json
+{
+  "flag": "prepare",
+  "height": 1,
+  "round": 0,
+  "validator_id": "node_a",
+  "block_data": {"block_hash": "..."}
+}
+```
+
+Il contenuto firmato è
+`{phase:"prepare", height, round, validator_id, block_hash}`. Per verificare
+il voto il motore invia `flag: "verified_prepare"`, gli stessi metadati,
+`block_hash` e `signature`.
+
+**Proposta di COMMIT con certificato PREPARE**
+
+Il messaggio tra peer è il termine
+`{:commit_proposal, height, round, proposer_id, block_data,
+proposer_signature, prepare_signatures}`; `prepare_signatures` è una mappa
+`validator_id => signature`. Il Router la inoltra al motore, che la converte
+in una lista JSON per la verifica:
+
+```json
+{
+  "flag": "commit_proposal",
+  "height": 1,
+  "round": 0,
+  "proposer_id": "node_a",
+  "block_data": {"height": 1, "round": 0, "block_hash": "..."},
+  "signature": "<firma-proposer>",
+  "signatures": [
+    {"validator_id": "node_a", "signature": "<firma-prepare>"},
+    {"validator_id": "node_b", "signature": "<firma-prepare>"},
+    {"validator_id": "node_c", "signature": "<firma-prepare>"}
+  ]
+}
+```
+
+La risposta Python `{"status":true}` autorizza quel nodo a votare COMMIT,
+non a scrivere direttamente il blocco. Ogni nodo firma un voto COMMIT e propaga il termine con la prova completa:
+
+```elixir
+{:commit_vote, height, round, proposer_id, block_data, proposer_signature,
+ prepare_signatures, block_hash, validator_id, signature}
+```
+
+`prepare_signatures` è la mappa `validator_id => signature` già descritta
+nella `commit_proposal`. Prima di contare il voto, ogni destinatario verifica
+sia il certificato PREPARE allegato sia la firma COMMIT del mittente.
+
+Il messaggio corrispondente inviato a Python per la verifica è:
+
+```json
+{
+  "flag": "verified_commit",
+  "height": 1,
+  "round": 0,
+  "block_hash": "...",
+  "validator_id": "node_b",
+  "signature": "<firma-commit>"
+}
+```
+
+Python risponde con `{"status":true}` o `{"status":false}`. Elixir conta solo
+voti validi e distinti per lo stesso blocco; il nodo invia `write_block`
+soltanto dopo aver raggiunto il quorum COMMIT `2f + 1`.
+
+**ROUND_CHANGE per timeout**
+
+La richiesta `round_change` include `reason: "timeout"`, `height`,
+`target_round` e `validator_id`. Python restituisce lo stesso oggetto con
+`signature`. Il destinatario cambia `flag` in `verified_round_change` per
+richiedere la verifica; il contenuto firmato non include il campo di
+instradamento `flag`.
+
+**Prova compatta di equivocation**
+
+Richiesta di verifica locale:
+
+```json
+{
+  "flag": "pre_prepare_conflict",
+  "height": 1,
+  "round": 0,
+  "proposer_id": "node_b",
+  "validator_id": "node_a",
+  "forged_block_hash": "...",
+  "forged_signature": "...",
+  "conflicting_block_hash": "...",
+  "conflicting_signature": "..."
+}
+```
+
+Python verifica che i due hash siano diversi e che entrambe le firme del
+proposer siano valide per la stessa altezza e round. La firma dell'accusatore
+copre il contenuto canonico:
+
+```json
+{
+  "flag": "pre_prepare_conflict",
+  "height": 1,
+  "round": 0,
+  "validator_id": "node_a",
+  "hash_1": "<forged_block_hash>",
+  "hash_2": "<conflicting_block_hash>"
+}
+```
+
+La risposta `proof` contiene `flag: "pre_prepare_conflict_proof"`, altezza,
+round, proposer e validator, entrambi gli hash e le rispettive firme, più
+`validator_signature`. Elixir cambia il flag in `round_change` e aggiunge
+`target_round = round + 1`. Ogni peer verifica che `target_round` sia
+coerente, ricontrolla le firme del proposer e verifica la firma
+dell'accusatore prima di conteggiare il voto.
+
+## Transazioni e gossip
+
+Una transazione inoltrata deve conservare integralmente i campi firmati dal
+client (`from_node`, dati dell'operazione, `pub_key` e `signature`). Il Router
+la passa a Python senza modificarli. Per fermare i loop di gossip aggiunge
+solo `relay_node`, metadato di trasporto non firmato, che viene rimosso prima
+della validazione Python.
+
+Le transazioni duplicate non vengono reinoltrate. Dopo la conferma del blocco,
+Python rimuove dalla mempool le transazioni incluse.
+
+## Modalità di simulazione bizantina
+
+In modalità bizantina le transazioni valide seguono lo stesso percorso delle
+altre modalità: vengono validate, aggiunte alla mempool e inoltrate ai peer.
+La fault injection altera esclusivamente i messaggi di consenso. Per
+selezionare lo scenario, impostare lo stesso `BIZANTINE_SCENARIO` nel
+container Elixir e in quello Python del nodo bizantino:
+
+| Valore | Comportamento simulato | Difesa attesa |
+|---|---|---|
+| `split_brain` | Il proposer invia `commit_proposal` solo ai primi due peer ordinati e non vota COMMIT. I voti COMMIT dei peer portano il certificato PREPARE e vengono diffusi a tutti. | I peer non informati verificano la prova e votano COMMIT; ogni nodo scrive solo dopo aver contato `2f+1` voti. |
+| `equivocation` | Il proposer invia due blocchi distinti, entrambi firmati, a due partizioni. Il blocco alternativo contiene un sottoinsieme delle transazioni del blocco principale, con la stessa altezza e lo stesso parent. | Ogni validatore onesto fissa una sola proposta per altezza/round e segnala le due firme del proposer; non firma entrambi i blocchi. |
+| `leader_offline` | Il proposer invia PRE-PREPARE e raccoglie PREPARE, ma non invia `commit_proposal` né il proprio `ROUND_CHANGE`. | In assenza di voti COMMIT, i nodi onesti raggiungono il quorum `ROUND_CHANGE` dopo il timeout e passano al round successivo. |
+| `invalid_signature` | Mantiene la simulazione precedente: il nodo altera una proposta e usa firme non verificabili. | Le firme e gli hash invalidi vengono rifiutati. |
+
+Il valore predefinito è `invalid_signature`. Lo scenario `equivocation`
+richiede almeno due transazioni pendenti; con meno di due, l'endpoint
+`prepare_block` restituisce un errore esplicito. `ByzantineEngine` è un
+supporto di fault injection chiamato dal `ConsensusEngine`, non un secondo
+motore avviato nella supervision tree. La modalità `noresponse` continua
+invece a scartare il traffico secondo il proprio comportamento dedicato.

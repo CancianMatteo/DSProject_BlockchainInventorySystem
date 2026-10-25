@@ -61,10 +61,8 @@ def python_call(
         return {"status": distributed_service.verify_pre_prepare(payload)}
 
     if flag == "pre_prepare_conflict":
-        proof = distributed_service.verify_pre_prepare_conflict(payload)
-        if proof is None:
-            return {"status": False}
-        return {"status": True, "validator_signature": proof["validator_signature"]}
+        proof = distributed_service.create_pre_prepare_conflict_proof(payload)
+        return {"status": proof is not None, "proof": proof}
 
     # --- Voti PREPARE / COMMIT ---
     if flag == "prepare":
@@ -72,6 +70,9 @@ def python_call(
 
     if flag == "verified_prepare":
         return {"status": distributed_service.verify_vote("prepare", payload)}
+
+    if flag == "commit_proposal":
+        return {"status": distributed_service.verify_prepare_certificate(payload)}
 
     if flag == "commit":
         return distributed_service.sign_vote("commit", payload)

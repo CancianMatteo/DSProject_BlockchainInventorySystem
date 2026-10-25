@@ -180,11 +180,6 @@ def _order_transactions(transactions: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def submit_transaction(db: Session, transaction: dict[str, Any]) -> dict[str, Any]:
-    if simbehaviour_service.is_byzantine():
-        # Drop the transaction (never reaches the mempool/peers) and forge a
-        # spoofed acknowledgement for the local engine.
-        forged = _spoof_transaction(transaction if isinstance(transaction, dict) else {}, settings.node_id)
-        return {"tx_id": forged["tx_id"], "status": "pending", "duplicate": True, "forged": True}
     normalized = _validate_transaction(transaction)
     tx_id = _transaction_id(normalized)
     if tx_id in _transactions_in_chain(db):
@@ -245,7 +240,7 @@ def _configured_validator_keys() -> dict[str, str]:
             raise DistributedReject("Validator public-key configuration is invalid", 500) from exc
     if not isinstance(configured, dict):
         raise DistributedReject("Validator public-key configuration must be an object", 500)
-    return configured
+    return {**peer_public_keys, **configured}
 
 
 def _verify_votes(block: dict[str, Any], votes: Any) -> list[dict[str, Any]]:
@@ -462,6 +457,19 @@ def transaction_status(db: Session, tx_id: str) -> dict[str, Any]:
 
 # Chiavi pubbliche dei peer ricevute via setup_keys_warning (registro volatile).
 peer_public_keys: dict[str, str] = {}
+_BYZANTINE_SCENARIOS = {
+    "invalid_signature",
+    "split_brain",
+    "equivocation",
+    "leader_offline",
+}
+
+
+def _byzantine_scenario() -> str:
+    scenario = os.getenv("BIZANTINE_SCENARIO", "invalid_signature")
+    if scenario not in _BYZANTINE_SCENARIOS:
+        raise DistributedReject(f"Unsupported BIZANTINE_SCENARIO: {scenario}", 500)
+    return scenario
 
 
 def _forge_signature(content: dict[str, Any]) -> str:
@@ -495,7 +503,10 @@ def _spoof_transaction(base: dict[str, Any], node_id: str) -> dict[str, Any]:
 
 
 def local_public_key() -> str:
-    if simbehaviour_service.is_byzantine():
+    if (
+        simbehaviour_service.is_byzantine()
+        and _byzantine_scenario() == "invalid_signature"
+    ):
         # Advertise an unrelated key so honest nodes cannot match this node
         # to its registered validator identity.
         decoy = Ed25519PrivateKey.generate()
@@ -538,7 +549,10 @@ def _validator_private_key() -> Ed25519PrivateKey:
 
 
 def sign_payload(content: dict[str, Any]) -> str:
-    if simbehaviour_service.is_byzantine():
+    if (
+        simbehaviour_service.is_byzantine()
+        and _byzantine_scenario() == "invalid_signature"
+    ):
         return _forge_signature(content)
     signature = _validator_private_key().sign(canonical_json(content))
     return base64.b64encode(signature).decode("ascii")
@@ -586,7 +600,10 @@ def prepare_proposal(db: Session, round_number: int) -> dict[str, Any]:
     if not block:
         # Nessuna transazione in mempool: il motore Elixir registra un warning.
         return {"flag": "prepare_block", "block_data": None}
-    if simbehaviour_service.is_byzantine():
+    if (
+        simbehaviour_service.is_byzantine()
+        and _byzantine_scenario() == "invalid_signature"
+    ):
         # Tamper the proposal while keeping the original (valid) signature:
         # honest nodes recompute the hash and reject the block.
         tampered = dict(block)
@@ -612,14 +629,38 @@ def prepare_proposal(db: Session, round_number: int) -> dict[str, Any]:
             "block_data": tampered,
             "proposer_sign": sign_payload(content),
         }
+
     content = _proposal_signature_payload(
         block["height"], block["round"], settings.node_id, block["block_hash"]
     )
-    return {
+    proposal = {
         "flag": "prepare_block",
         "block_data": block,
         "proposer_sign": sign_payload(content),
     }
+
+    if (
+        simbehaviour_service.is_byzantine()
+        and _byzantine_scenario() == "equivocation"
+    ):
+        if len(block["transactions"]) < 2:
+            raise DistributedReject(
+                "The equivocation scenario requires at least two pending transactions"
+            )
+
+        alternate = dict(block)
+        alternate["transactions"] = list(block["transactions"][:-1])
+        alternate["block_hash"] = _compute_block_hash(alternate)
+        alternate_content = _proposal_signature_payload(
+            alternate["height"],
+            alternate["round"],
+            settings.node_id,
+            alternate["block_hash"],
+        )
+        proposal["equivocation_block_data"] = alternate
+        proposal["equivocation_sign"] = sign_payload(alternate_content)
+
+    return proposal
 
 
 def verify_pre_prepare(payload: dict[str, Any]) -> bool:
@@ -655,72 +696,169 @@ def verify_pre_prepare(payload: dict[str, Any]) -> bool:
     return verify_validator_signature(proposer_id, content, payload.get("signature"))
 
 
-def _conflict_round_change_content(payload: dict[str, Any]) -> dict[str, Any]:
-    # Deve coincidere con il contenuto firmato del messaggio :round_change
-    # generato dal motore Elixir quando rileva il conflitto.
-    round_number = payload.get("round")
+def _conflict_accusation_content(
+    height: Any,
+    round_number: Any,
+    validator_id: Any,
+    forged_block_hash: Any,
+    conflicting_block_hash: Any,
+) -> dict[str, Any]:
     return {
-        "height": payload.get("height"),
-        "target_round": round_number + 1
-        if isinstance(round_number, int) and not isinstance(round_number, bool)
-        else None,
-        "validator_id": settings.node_id,
-        "conflicting_block": payload.get("conflicting_block"),
-        "conflicting_signature": payload.get("conflicting_signature"),
-        "forged_block": payload.get("block_data"),
-        "forged_signature": payload.get("signature"),
+        "flag": "pre_prepare_conflict",
+        "height": height,
+        "round": round_number,
+        "validator_id": validator_id,
+        "hash_1": forged_block_hash,
+        "hash_2": conflicting_block_hash,
     }
 
 
-def verify_pre_prepare_conflict(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """Prova che il proposer abbia firmato due blocchi diversi per lo stesso
-    round, oppure None se non c'è conflitto (o il proposer non è valido)."""
-    if not verify_pre_prepare(payload):
-        return None
-
-    forged = payload.get("block_data")
-    conflicting = payload.get("conflicting_block")
-    if not isinstance(forged, dict) or not isinstance(conflicting, dict):
-        return None
-    if conflicting == forged:
-        return None
-    if (
-        conflicting.get("height") != forged.get("height")
-        or conflicting.get("round") != forged.get("round")
-        or not isinstance(conflicting.get("block_hash"), str)
-        or _compute_block_hash(conflicting) != conflicting["block_hash"]
-    ):
-        return None
-
-    # Anche il blocco in possesso di questo nodo deve essere firmato dal proposer.
+def create_pre_prepare_conflict_proof(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Sign a compact proof that a proposer signed two different block hashes."""
+    height = payload.get("height")
+    round_number = payload.get("round")
     proposer_id = payload.get("proposer_id")
-    conflict_content = _proposal_signature_payload(
-        conflicting["height"], conflicting["round"], proposer_id, conflicting["block_hash"]
-    )
-    if not verify_validator_signature(
-        proposer_id, conflict_content, payload.get("conflicting_signature")
+    validator_id = payload.get("validator_id")
+    forged_hash = payload.get("forged_block_hash")
+    conflicting_hash = payload.get("conflicting_block_hash")
+    if (
+        isinstance(height, bool)
+        or not isinstance(height, int)
+        or height < 1
+        or isinstance(round_number, bool)
+        or not isinstance(round_number, int)
+        or round_number < 0
+        or validator_id != settings.node_id
+        or not isinstance(forged_hash, str)
+        or not isinstance(conflicting_hash, str)
+        or forged_hash == conflicting_hash
     ):
         return None
 
-    return {"validator_signature": sign_payload(_conflict_round_change_content(payload))}
+    validators = sorted(_configured_validator_keys())
+    if not validators or proposer_id != validators[(height + round_number) % len(validators)]:
+        return None
+
+    forged_content = _proposal_signature_payload(height, round_number, proposer_id, forged_hash)
+    conflicting_content = _proposal_signature_payload(
+        height, round_number, proposer_id, conflicting_hash
+    )
+    if not verify_validator_signature(proposer_id, forged_content, payload.get("forged_signature")):
+        return None
+    if not verify_validator_signature(
+        proposer_id, conflicting_content, payload.get("conflicting_signature")
+    ):
+        return None
+
+    accusation = _conflict_accusation_content(
+        height, round_number, validator_id, forged_hash, conflicting_hash
+    )
+    return {
+        "flag": "pre_prepare_conflict_proof",
+        "height": height,
+        "round": round_number,
+        "proposer_id": proposer_id,
+        "validator_id": validator_id,
+        "forged_block_hash": forged_hash,
+        "forged_signature": payload["forged_signature"],
+        "conflicting_block_hash": conflicting_hash,
+        "conflicting_signature": payload["conflicting_signature"],
+        "validator_signature": sign_payload(accusation),
+    }
+
+
+def verify_pre_prepare_conflict_proof(payload: dict[str, Any]) -> bool:
+    height = payload.get("height")
+    round_number = payload.get("round")
+    proposer_id = payload.get("proposer_id")
+    validator_id = payload.get("validator_id")
+    forged_hash = payload.get("forged_block_hash")
+    conflicting_hash = payload.get("conflicting_block_hash")
+    target_round = payload.get("target_round")
+    if (
+        isinstance(height, bool)
+        or not isinstance(height, int)
+        or height < 1
+        or isinstance(round_number, bool)
+        or not isinstance(round_number, int)
+        or round_number < 0
+        or target_round != round_number + 1
+        or not isinstance(forged_hash, str)
+        or not isinstance(conflicting_hash, str)
+        or forged_hash == conflicting_hash
+    ):
+        return False
+
+    validators = sorted(_configured_validator_keys())
+    if not validators or proposer_id != validators[(height + round_number) % len(validators)]:
+        return False
+
+    forged_content = _proposal_signature_payload(height, round_number, proposer_id, forged_hash)
+    conflicting_content = _proposal_signature_payload(
+        height, round_number, proposer_id, conflicting_hash
+    )
+    if not verify_validator_signature(proposer_id, forged_content, payload.get("forged_signature")):
+        return False
+    if not verify_validator_signature(
+        proposer_id, conflicting_content, payload.get("conflicting_signature")
+    ):
+        return False
+
+    accusation = _conflict_accusation_content(
+        height, round_number, validator_id, forged_hash, conflicting_hash
+    )
+    return verify_validator_signature(
+        validator_id, accusation, payload.get("validator_signature")
+    )
 
 
 # --- Voti PREPARE / COMMIT ---------------------------------------------------
 
 def _vote_signature_payload(
-    phase: str, height: Any, round_number: Any, validator_id: Any
+    phase: str,
+    height: Any,
+    round_number: Any,
+    validator_id: Any,
+    block_hash: Any = None,
 ) -> dict[str, Any]:
-    return {
+    content = {
         "phase": phase,
         "height": height,
         "round": round_number,
         "validator_id": validator_id,
     }
+    if block_hash is not None:
+        content["block_hash"] = block_hash
+    return content
 
 
 def sign_vote(phase: str, payload: dict[str, Any]) -> dict[str, Any]:
+    block = payload.get("block_data")
+    block_hash = (
+        block.get("block_hash") if isinstance(block, dict) else payload.get("block_hash")
+    )
+    if phase == "prepare" and (
+        not isinstance(block, dict)
+        or not isinstance(block_hash, str)
+        or block.get("height") != payload.get("height")
+        or block.get("round") != payload.get("round")
+        or _compute_block_hash(block) != block_hash
+    ):
+        raise DistributedReject("PREPARE vote requires a valid block matching its height and round")
+    if phase == "commit" and (
+        not isinstance(block_hash, str)
+        or not block_hash
+        or isinstance(payload.get("height"), bool)
+        or not isinstance(payload.get("height"), int)
+        or payload["height"] < 1
+        or isinstance(payload.get("round"), bool)
+        or not isinstance(payload.get("round"), int)
+        or payload["round"] < 0
+    ):
+        raise DistributedReject("COMMIT vote requires height, round and block_hash")
+
     content = _vote_signature_payload(
-        phase, payload.get("height"), payload.get("round"), settings.node_id
+        phase, payload.get("height"), payload.get("round"), settings.node_id, block_hash
     )
     return {"flag": payload.get("flag"), "signature": sign_payload(content)}
 
@@ -731,13 +869,58 @@ def verify_vote(phase: str, payload: dict[str, Any]) -> bool:
     if (
         isinstance(height, bool)
         or not isinstance(height, int)
+        or height < 1
         or isinstance(round_number, bool)
         or not isinstance(round_number, int)
+        or round_number < 0
     ):
         return False
     validator_id = payload.get("validator_id")
-    content = _vote_signature_payload(phase, height, round_number, validator_id)
+    block_hash = payload.get("block_hash")
+    if phase in {"prepare", "commit"} and (
+        not isinstance(block_hash, str) or not block_hash
+    ):
+        return False
+    content = _vote_signature_payload(
+        phase, height, round_number, validator_id, block_hash
+    )
     return verify_validator_signature(validator_id, content, payload.get("signature"))
+
+
+def verify_prepare_certificate(payload: dict[str, Any]) -> bool:
+    block = payload.get("block_data")
+    if not isinstance(block, dict) or not verify_pre_prepare(payload):
+        return False
+
+    signatures = payload.get("signatures")
+    if not isinstance(signatures, list):
+        return False
+
+    validators = sorted(_configured_validator_keys())
+    if not validators:
+        return False
+    quorum = 2 * ((len(validators) - 1) // 3) + 1
+    seen: set[str] = set()
+    valid_votes = 0
+    for vote in signatures:
+        if not isinstance(vote, dict):
+            return False
+        validator_id = vote.get("validator_id")
+        if not isinstance(validator_id, str) or validator_id in seen:
+            return False
+        vote_payload = {
+            "height": block.get("height"),
+            "round": block.get("round"),
+            "block_hash": block.get("block_hash"),
+            "validator_id": validator_id,
+            "signature": vote.get("signature"),
+        }
+        if not verify_vote("prepare", vote_payload):
+            return False
+        seen.add(validator_id)
+        valid_votes += 1
+
+    return valid_votes >= quorum
 
 
 # --- ROUND CHANGE ------------------------------------------------------------
@@ -770,6 +953,9 @@ def verify_round_change(payload: dict[str, Any]) -> bool:
     ):
         return False
 
+    if "forged_block_hash" in payload or "conflicting_block_hash" in payload:
+        return verify_pre_prepare_conflict_proof(payload)
+
     content = _round_change_content(payload)
     validator_id = content.get("validator_id")
 
@@ -777,12 +963,7 @@ def verify_round_change(payload: dict[str, Any]) -> bool:
     if verify_validator_signature(validator_id, content, payload.get("signature")):
         return True
 
-    # Prova di conflitto firmata dallo stesso validatore (path
-    # pre_prepare_conflict): il contenuto firmato coincide con quello del
-    # messaggio di round_change inoltrato agli altri nodi.
-    return verify_validator_signature(
-        validator_id, content, payload.get("validator_signature")
-    )
+    return False
 
 
 # --- Scrittura del blocco confermato -----------------------------------------

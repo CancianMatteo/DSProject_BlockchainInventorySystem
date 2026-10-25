@@ -20,6 +20,9 @@ COPY . .
 
 RUN mix compile
 
+EXPOSE 4000
+EXPOSE 6000
+
 # Port map per node (see PORTS.md at the repo root):
 #   4000 - Elixir cluster gossip (Erlang-term, packet:4 framing) – internal only
 #   6000 - Elixir simbehaviour HTTP listener – internal only (set via ELIXIR_HTTP_PORT)

@@ -93,7 +93,7 @@ if [[ -n "$VPS_PASS" ]]; then
   need_cmd sshpass
 fi
 
-[[ -f "$ROOT_DIR/Server_Python/.env.example" ]] || die "Server_Python/.env.example was not found."
+[[ -f "$ROOT_DIR/Server_Python/.env" ]] || die "Server_Python/.env was not found."
 [[ -f "$ROOT_DIR/Server_Python/Dockerfile" ]] || die "Server_Python/Dockerfile was not found."
 [[ -f "$ROOT_DIR/Server_MessagerNode/Dockerfile" ]] || die "Server_MessagerNode/Dockerfile was not found."
 
@@ -156,7 +156,7 @@ for node in node_a node_b node_c node_d; do
       /^ELIXIR_HOST=/ { next }
       /^ELIXIR_HTTP_PORT=/ { print "ELIXIR_HTTP_PORT=600" suffix; next }
       { print }
-    ' "$ROOT_DIR/Server_Python/.env.example" > "$node_env_dir/.env"
+    ' "$ROOT_DIR/Server_Python/.env" > "$node_env_dir/.env"
 
   {
     printf 'VALIDATOR_PRIVATE_KEY=%s\n' "${!private_var}"
@@ -218,7 +218,7 @@ node_number() {
   esac
 }
 
-if grep -q '^SMTP_HOST=smtp.example.com$' "$WDIR/Server_Python/.env.example" || grep -q '^SMTP_PASS=CHANGE_ME_SMTP_PASSWORD$' "$WDIR/Server_Python/.env.example"; then
+if grep -q '^SMTP_HOST=smtp.example.com$' "$ENV_DIR/node_a/.env" || grep -q '^SMTP_PASS=CHANGE_ME_SMTP_PASSWORD$' "$ENV_DIR/node_a/.env"; then
 printf 'Warning: SMTP still has example credentials; email-based authentication and alerts will not work until configured.
 ' >&2
 fi

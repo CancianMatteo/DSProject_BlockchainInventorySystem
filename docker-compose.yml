@@ -141,6 +141,7 @@ services:
     environment:
       - ELIXIR_HOST=node_d
       - ELIXIR_HTTP_PORT=6000
+      - BIZANTINE_SCENARIO=${BIZANTINE_SCENARIO:-invalid_signature}
     volumes:
       - bis_data_d:/data # volume univoco per il nodo D
     ports:
@@ -158,6 +159,7 @@ services:
       - PYTHON_HOST=python_validator
       - PYTHON_PORT=8000
       - ELIXIR_HTTP_PORT=6000
+      - BIZANTINE_SCENARIO=${BIZANTINE_SCENARIO:-invalid_signature}
       - PEERS=node_a:4000,node_b:4000,node_c:4000
     depends_on:
       - python_validator_d

@@ -23,9 +23,15 @@ from app.services.distributed_service import (
     canonical_json,
     chain_from,
     commit_block,
+    create_pre_prepare_conflict_proof,
     import_block,
+    prepare_proposal,
     submit_transaction,
     transaction_status,
+    verify_prepare_certificate,
+    verify_pre_prepare,
+    verify_pre_prepare_conflict_proof,
+    verify_vote,
 )
 
 
@@ -167,6 +173,105 @@ def test_rejects_duplicate_validator_votes(db, validator_keys):
 
     with pytest.raises(DistributedReject, match="At least 3 distinct"):
         commit_block(db, proposal, votes)
+
+
+def test_compact_conflict_proof_requires_two_proposer_signatures(validator_keys):
+    height = 1
+    round_number = 0
+    proposer_id = "node_b"
+    hashes = ("hash-forged", "hash-conflicting")
+    signatures = [
+        base64.b64encode(
+            validator_keys[proposer_id].sign(
+                canonical_json({
+                    "height": height,
+                    "round": round_number,
+                    "proposer_id": proposer_id,
+                    "block_hash": block_hash,
+                })
+            )
+        ).decode("ascii")
+        for block_hash in hashes
+    ]
+    proof = create_pre_prepare_conflict_proof({
+        "height": height,
+        "round": round_number,
+        "proposer_id": proposer_id,
+        "validator_id": "node_a",
+        "forged_block_hash": hashes[0],
+        "forged_signature": signatures[0],
+        "conflicting_block_hash": hashes[1],
+        "conflicting_signature": signatures[1],
+    })
+
+    assert proof is not None
+    assert verify_pre_prepare_conflict_proof({**proof, "target_round": 1})
+    assert not verify_pre_prepare_conflict_proof({
+        **proof,
+        "target_round": 1,
+        "forged_block_hash": "tampered-hash",
+    })
+
+
+def test_prepare_certificate_binds_votes_to_the_block(db, validator_keys):
+    submit_transaction(db, make_transaction())
+    proposal = prepare_proposal(db, 3)
+    block = proposal["block_data"]
+    signatures = []
+    for validator_id in ("node_a", "node_b", "node_c"):
+        vote = {
+            "phase": "prepare",
+            "height": block["height"],
+            "round": block["round"],
+            "validator_id": validator_id,
+            "block_hash": block["block_hash"],
+        }
+        signatures.append({
+            "validator_id": validator_id,
+            "signature": base64.b64encode(
+                validator_keys[validator_id].sign(canonical_json(vote))
+            ).decode("ascii"),
+        })
+
+    certificate = {
+        "height": block["height"],
+        "round": block["round"],
+        "proposer_id": "node_a",
+        "block_data": block,
+        "signature": proposal["proposer_sign"],
+        "signatures": signatures,
+    }
+
+    assert verify_prepare_certificate(certificate)
+    assert not verify_prepare_certificate({
+        **certificate,
+        "signatures": [*signatures[:2], {**signatures[2], "signature": "invalid"}],
+    })
+
+
+def test_commit_vote_signature_is_bound_to_the_block(db, validator_keys):
+    submit_transaction(db, make_transaction())
+    proposal = prepare_proposal(db, 0)
+    block = proposal["block_data"]
+    vote = {
+        "phase": "commit",
+        "height": block["height"],
+        "round": block["round"],
+        "validator_id": "node_b",
+        "block_hash": block["block_hash"],
+        "signature": base64.b64encode(
+            validator_keys["node_b"].sign(canonical_json({
+                "phase": "commit",
+                "height": block["height"],
+                "round": block["round"],
+                "validator_id": "node_b",
+                "block_hash": block["block_hash"],
+            }))
+        ).decode("ascii"),
+    }
+
+    assert verify_vote("commit", vote)
+    assert not verify_vote("commit", {**vote, "block_hash": "different-block"})
 
 
 def test_rejects_outbound_transaction_exceeding_committed_stock(db, validator_keys):
@@ -314,22 +419,98 @@ def test_noresponse_blocks_python_call_too(healthy_mode, monkeypatch):
     assert client.get("/api/v1/health/live").status_code == 200
 
 
-def test_byzantine_drops_transactions_and_forges_signatures(db, validator_keys, healthy_mode, monkeypatch):
+def test_byzantine_keeps_transactions_and_forges_consensus_signatures(
+    db, healthy_mode, monkeypatch
+):
     from app.services import distributed_service
 
     monkeypatch.setattr(simbehaviour_service, "_forward_to_elixir", lambda mode: None)
+    monkeypatch.setenv("BIZANTINE_SCENARIO", "invalid_signature")
     simbehaviour_service.set_mode(simbehaviour_service.BIZANTINE)
     try:
-        # Transactions are dropped (never stored) and acknowledged as forged.
+        # Transactions remain valid mempool entries in Byzantine mode.
         transaction = make_transaction()
         result = distributed_service.submit_transaction(db, transaction)
-        assert result.get("forged") is True
-        assert db.get(PendingTransaction, transaction["tx_id"]) is None
+        assert result["duplicate"] is False
+        assert db.get(PendingTransaction, transaction["tx_id"]).status == "pending"
 
         # Signatures/keys are forged: honest verification must fail.
         content = {"hello": "world"}
         forged_signature = distributed_service.sign_payload(content)
         assert distributed_service.verify_validator_signature("node_a", content, forged_signature) is False
         assert distributed_service.local_public_key() != json.loads(settings.validator_public_keys)["node_a"]
+    finally:
+        simbehaviour_service.set_mode(simbehaviour_service.HEALTHY)
+
+
+def test_byzantine_equivocation_creates_two_validly_signed_proposals(
+    db, healthy_mode, monkeypatch, validator_keys
+):
+    from app.services import distributed_service
+
+    monkeypatch.setattr(simbehaviour_service, "_forward_to_elixir", lambda mode: None)
+    monkeypatch.setenv("BIZANTINE_SCENARIO", "equivocation")
+    simbehaviour_service.set_mode(simbehaviour_service.BIZANTINE)
+    try:
+        submit_transaction(db, make_transaction(item_id="item-1"))
+        submit_transaction(db, make_transaction(item_id="item-2"))
+        proposal = prepare_proposal(db, 3)
+
+        assert distributed_service.local_public_key() == json.loads(
+            settings.validator_public_keys
+        )["node_a"]
+        assert proposal["block_data"]["block_hash"] != proposal["equivocation_block_data"]["block_hash"]
+        for block_data, signature in (
+            (proposal["block_data"], proposal["proposer_sign"]),
+            (proposal["equivocation_block_data"], proposal["equivocation_sign"]),
+        ):
+            assert verify_pre_prepare({
+                "height": block_data["height"],
+                "round": block_data["round"],
+                "proposer_id": "node_a",
+                "block_data": block_data,
+                "signature": signature,
+            })
+
+        monkeypatch.setattr(settings, "node_id", "node_b")
+        node_b_seed = validator_keys["node_b"].private_bytes(
+            serialization.Encoding.Raw,
+            serialization.PrivateFormat.Raw,
+            serialization.NoEncryption(),
+        )
+        monkeypatch.setattr(
+            settings,
+            "validator_private_key",
+            base64.b64encode(node_b_seed).decode("ascii"),
+        )
+        proof = distributed_service.create_pre_prepare_conflict_proof({
+            "height": 1,
+            "round": 3,
+            "proposer_id": "node_a",
+            "validator_id": "node_b",
+            "forged_block_hash": proposal["block_data"]["block_hash"],
+            "forged_signature": proposal["proposer_sign"],
+            "conflicting_block_hash": proposal["equivocation_block_data"]["block_hash"],
+            "conflicting_signature": proposal["equivocation_sign"],
+        })
+        assert proof is not None
+        assert distributed_service.verify_pre_prepare_conflict_proof({
+            **proof,
+            "target_round": 4,
+        })
+    finally:
+        simbehaviour_service.set_mode(simbehaviour_service.HEALTHY)
+
+
+def test_equivocation_scenario_requires_two_pending_transactions(
+    db, healthy_mode, monkeypatch
+):
+    monkeypatch.setattr(simbehaviour_service, "_forward_to_elixir", lambda mode: None)
+    monkeypatch.setenv("BIZANTINE_SCENARIO", "equivocation")
+    simbehaviour_service.set_mode(simbehaviour_service.BIZANTINE)
+    try:
+        submit_transaction(db, make_transaction())
+        with pytest.raises(DistributedReject, match="requires at least two pending transactions"):
+            prepare_proposal(db, 3)
     finally:
         simbehaviour_service.set_mode(simbehaviour_service.HEALTHY)

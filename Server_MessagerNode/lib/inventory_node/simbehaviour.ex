@@ -9,9 +9,9 @@ defmodule InventoryNode.SimBehaviour do
                        accetta e scarta le connessioni, il Router ignora i
                        payload e i broadcast vengono soppressi (il backend
                        Python risponde solo agli endpoint simbehaviour)
-    * `:bizantine`  -> il nodo si comporta in modo bizantino: non inoltra le
-                       transazioni ricevute dai client e il backend produce
-                       firme/proposte/blocchi fasulli
+    * `:bizantine`  -> le transazioni valide vengono comunque salvate e
+                       inoltrate; il consenso usa lo scenario di fault
+                       injection configurato in `BIZANTINE_SCENARIO`
 
   Lo stato è condiviso tra motore Elixir e backend Python: l'endpoint Python
   `POST /api/v1/simbehaviour/{mode}` inoltra la richiesta a questo nodo via

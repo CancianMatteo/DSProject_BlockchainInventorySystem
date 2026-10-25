@@ -8,9 +8,9 @@ Modes (volatile, reset to ``healthy`` on restart):
 * ``noresponse`` - the node talks to nobody (cluster traffic is dropped
   on the Elixir side, every Python endpoint except ``simbehaviour`` and
   ``health`` answers 503);
-* ``bizantine``  - byzantine behaviour: transactions received from clients
-  are not forwarded to peers, and proposals/votes/transactions are
-  forged so honest nodes reject them.
+* ``bizantine``  - valid transactions are stored and forwarded normally;
+  only consensus is altered. ``BIZANTINE_SCENARIO`` selects partial commit
+  delivery, validly signed equivocation, leader timeout, or invalid signatures.
 
 The mode is shared with the Elixir consensus engine: every change is
 forwarded (best-effort) to the co-located Elixir HTTP listener at
