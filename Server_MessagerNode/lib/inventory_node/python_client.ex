@@ -38,7 +38,7 @@ defmodule InventoryNode.PythonClient do
            []
          ) do
       {:ok, {{_http_version, 200, _status}, _headers, body}} ->
-        case JSON.decode(body) do
+        case JSON.decode(IO.iodata_to_binary(body)) do
           {:ok, decoded} -> {:ok, decoded}
           {:error, reason} -> {:error, "malformed JSON response: #{inspect(reason)}"}
         end
