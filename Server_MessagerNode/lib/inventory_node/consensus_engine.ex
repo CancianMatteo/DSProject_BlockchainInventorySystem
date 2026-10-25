@@ -88,7 +88,7 @@ defmodule InventoryNode.ConsensusEngine do
 
     # richiede la firma per il cambio round
     payload = %{
-      "flag" => "round_change",
+      "flag" => "timeout",
       "height" => state.current_height,
       "target_round" => target_round,
       "validator_id" => state.node_id,
@@ -123,8 +123,8 @@ defmodule InventoryNode.ConsensusEngine do
   def handle_cast({:round_change, payload}, state) do
     engine_pid = self()
 
-    round_payload = payload
-                    |> Map.put("flag", "verified_round_change")
+    # round_payload = payload
+    #                 |> Map.put("flag", "verified_round_change")
 
     # asincrona
     Task.start(fn ->
@@ -253,13 +253,13 @@ defmodule InventoryNode.ConsensusEngine do
           case send_to_python_service(conflict_payload, state.python_host, state.python_port) do
             {:ok, %{"status" => true} = proof} ->
               msg = {:round_change, %{
-                "flag" => "round_change",
+                "flag" => "pre_prepare_roundchange",
                 "height" => height,
                 "target_round" => round + 1,
                 "validator_id" => state.node_id,
-                "conflicting_block" => state.pending_block,
+                "conflicting_block_hash" => state.pending_block["hash"],
                 "conflicting_signature" => state.temporary_signature,
-                "forged_block" => block_data,
+                "forged_block_hash" => block_data["hash"],
                 "forged_signature" => signature,
                 "validator_signature" => proof["validator_signature"]
               }}

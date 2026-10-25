@@ -159,7 +159,7 @@ Recupera la chiave pubblica di validator_id e verifica VerifySignature(pub_key_v
 
 DUE TIPI DI ROUND CHANGE (timeout e doppia proposta di blocchi diversi):
 - JSON di forma {
-      "flag" => "round_change",
+      "flag" => "timeout",
       "height" => state.current_height,
       "target_round" => target_round,
       "validator_id" => state.node_id,
@@ -167,16 +167,20 @@ DUE TIPI DI ROUND CHANGE (timeout e doppia proposta di blocchi diversi):
     } : in questo caso bisogna verificare la 'signature' del nodo "validator_id" con la sua chiave pubblica, ritornando un JSON con {"status": true} o {"status": false}
 
 - JSON di forma  {
-      "flag" => "round_change",
+      "flag" => "pre_prepare_conflict",
       "height" => height,
       "target_round" => round + 1,
       "validator_id" => state.node_id,
-      "conflicting_block" => state.pending_block, 
+      "conflicting_block_hash" => state.pending_block["hash"], 
       "conflicting_signature" => state.temporary_signature,
-      "forged_block" => block_data,
+      "forged_block_hash" => block_data["hash"],
       "forged_signature" => signature,
       validator_signature: proof["validator_signature"]
             } : Dovresti verificare che 'block_data' e la sua 'signature' corrispondano a quelli del leader che la proppone 'proposer_id', lo stesso per "conflicting_block" e "conflicting_signature". Se entrambi sono firmati da 'proposer_id' e i blocchi sono diversi allora restituisci un JSON con {"status": boolean, "validator_signature": String}. Verifica anche la firma del validatore con la sua chiave pubblica sulla proof (proof è "validator_id","block_data","signature","conflicting_block","conflicting_signature")
+
+- JSON di forma 
+
+
 
 - JSON di forma {"flag" => "pre_prepare",
  "height" => height,
