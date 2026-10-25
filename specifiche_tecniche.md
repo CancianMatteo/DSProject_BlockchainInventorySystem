@@ -4,13 +4,31 @@ Questo documento definisce i dettagli implementativi per la gestione delle trans
 
 ## Contesto Architetturale
 
-Come illustrato nell'immagine "image_fcef1b.png"[cite: 1], il sistema Elixir funge da interfaccia di rete (Server Interface)[cite: 1]. Nello specifico, il modulo `ClusterListener` (visibile nello screenshot) si occupa di ascoltare le comunicazioni intra-cluster (tra i nodi validatori) su una porta dedicata, decodificando i messaggi binari tramite `:erlang.binary_to_term` e inoltrandoli a `InventoryNode.Router.handle_payload`[cite: 1]. Parallelamente, è presente un `ClientListener` (non mostrato in dettaglio, ma deducibile dalla struttura dei file) che accetta richieste in ingresso dai client[cite: 1].
+Come illustrato nell'immagine "image_fcef1b.png"[cite: 1], il sistema Elixir funge da interfaccia di rete (Server Interface)[cite: 1]. Nello specifico, il modulo `ClusterListener` (visibile nello screenshot) si occupa di ascoltare le comunicazioni intra-cluster (tra i nodi validatori) sulla porta dedicata 4000, decodificando i messaggi binari tramite `:erlang.binary_to_term` e inoltrandoli a `InventoryNode.Router.handle_payload`[cite: 1]. Non esiste un `ClientListener` Elixir: le richieste dei client arrivano al backend Python (porta 8000), che dialoga con il motore Elixir solo via `POST /api/v1/python_call` (Elixir→Python) e `POST /api/v1/simbehaviour` (Python→Elixir, porta interna 6001).
 
 Il modulo `InventoryNode.Router` analizzato funge da dispatcher, inoltrando le richieste (come le transazioni o il setup delle chiavi) al servizio Python (che gestirà la Mempool e la logica di consenso BFT).
 
 ## Struttura del Payload JSON per le Transazioni
 
-Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requisiti del progetto (FR-1, FR-2, FR-3), quando un client (nodo operatore) invia una transazione al backend python del nodo x (in ascolto sulla porta 5000, mappata sulla 500x), il payload JSON deve rispettare la seguente struttura:
+Sulla base del codice Elixir fornito nel `Router`, e in allineamento con i requisiti del progetto (FR-1, FR-2, FR-3), quando un client (nodo operatore) invia una transazione al backend python del nodo x (in ascolto sulla porta 8000, mappata sulla 800x dal deploy), il payload JSON deve rispettare la seguente struttura:
+
+## Mappa delle porte (nessun conflitto)
+
+Ogni nodo logico è composto da due container che condividono l'IP del nodo
+ma espongono porte diverse, quindi non serve sdoppiare nulla:
+
+- backend Python: porta **8000** nel container (client esterni E motore
+  Elixir sullo stesso socket: FastAPI distingue per path `/api/v1/...` vs
+  `/api/v1/python_call`, non servono due porte). Il deploy pubblica
+  8001/8002/8003/8004 sugli host per i nodi a/b/c/d.
+- Elixir `ClusterListener`: porta **4000** (gossip intra-cluster in
+  Erlang-term, framing `packet: 4`). Il deploy pubblica 4001..4004 (porte interne al cluster Docker, nessuna esposizione host).
+- Elixir `HTTPListener`: porta **6001 internal** (solo forwarding
+  `POST /api/v1/simbehaviour` da Python verso Elixir, mai esposta all'esterno).
+
+In particolare NON esiste alcun `ClientListener` Elixir e l'immagine Elixir
+non lega mai la 8000 (il vecchio `EXPOSE 8000` nel Dockerfile era un
+refuso, ora corretto: i numeri di porta 4000 e 6000 sono ora solo interni al container (nessuna esposizione EXPOSE nel Dockerfile, comunicazione solo tramite rete Docker networking interno).
 
 
 ## API Python deve gestire i seguenti messaggi:
@@ -219,7 +237,19 @@ DUE TIPI DI ROUND CHANGE (timeout e doppia proposta di blocchi diversi):
                   "block_data" => state.pending_block} : scrivi il blocco "block_data" definitivamente sulla blockchain e restituisci un JSON {"status": boolean} con 'true' se il blocco è stato scritto correttamente o 'false' altrimenti
 
                   
-- Ho fatto il merging del docker compose impostando i nodi python come erano impostati nel docker compose dentro Server_backend. è da modificare probabilmente la porta con cui il client comunicherà con il Server_backend (scegli una tra 5001,5002,5003,5004)
+- Ho fatto il merging del docker compose impostando i nodi python come erano impostati nel docker compose dentro Server_backend. è da modificare probabilmente la porta con cui il client comunicherà con il Server_backend (scegli una tra 8001,8002,8003,8004)
+
+## File Documentation Cross-Reference
+
+| Topic | Document | Location |
+|---|---|---|
+| Python API ports (host mapping) | PORTS.md | Host ports 8001-8004 → 8000 |
+| Python API ports (client config) | specifiche_tecniche.md | Line 236: choose from 8001-8004 |
+| Elixir cluster gossip port | specifiche_tecniche.md | Line 25: port 4000, internal only |
+| Elixir simbehaviour listener | PORTS.md | Port 6000 internal, host 6001-6004 for testing |
+| Docker port exposure | backend_blueprint.md | Line 61: 4001-4004 internal-only note |
+| ELIXIR_HTTP_PORT env var | backend_blueprint.md | Line 611: no host exposure |
+| Dockerfile EXPOSE | specifiche_tecniche.md | Line 31: 4000/6000 internal only |
 
   
 

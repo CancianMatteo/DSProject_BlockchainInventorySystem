@@ -58,7 +58,7 @@ Transport notes:
   publishes it as host ports 8001..8004 (nodes a/b/c/d).
 - The Elixir side never binds 8000: it listens on 4000 (cluster gossip) and
   on the internal-only 6001 (simbehaviour forwarding from Python). The deploy
-  publishes 4000 as host ports 4001..4004.
+  publishes 4000 as host ports 4001..4004 (now internal-only, no host exposure).
 - TLS in dev may use self-signed certs for testing; clients must explicitly allow them in debug.
 
 ### 3.1 POST /auth/login
@@ -608,7 +608,7 @@ Environment variables:
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`
 - `SECURITY_ALERT_EMAIL`
 - `ELIXIR_HOST=...` (container/network alias of the co-located Elixir node)
-- `ELIXIR_HTTP_PORT=6001` per node (node_a -> 6001, ... node_d -> 6004; internal Elixir HTTP listener)
+- `ELIXIR_HTTP_PORT=6001` per node (node_a -> 6001, ... node_d -> 6004; internal Elixir HTTP listener, no host port exposure – communication uses Docker internal networking)
 
 Runtime command:
 - `python -m app.run_server` (uvicorn on `$API_HOST:$API_PORT`, i.e. `0.0.0.0:8000`)
