@@ -21,11 +21,10 @@ COPY . .
 RUN mix compile
 
 # Port map per node (see PORTS.md at the repo root):
-#   4000 - Elixir cluster gossip (Erlang-term, packet:4 framing)
-#   6000 - Elixir simbehaviour HTTP listener (mapped per node: node_a -> 6001, ...;  set via ELIXIR_HTTP_PORT)
+#   4000 - Elixir cluster gossip (Erlang-term, packet:4 framing) – internal only
+#   6000 - Elixir simbehaviour HTTP listener – internal only (set via ELIXIR_HTTP_PORT)
 # The Python backend owns port 8000 in its own container; this image never
 # binds 8000, so sharing the node's IP is conflict-free.
-EXPOSE 4000
-EXPOSE 6000
+# No ports are exposed because all inter‑process communication uses internal Docker networking.
 
 CMD ["mix", "run", "--no-halt"]
