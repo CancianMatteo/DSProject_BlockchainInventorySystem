@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:distr_bis/auth/auth_provider.dart';
 import 'package:distr_bis/notifications/notification_provider.dart';
 import 'package:distr_bis/services/api_service.dart';
 import 'package:provider/provider.dart';
@@ -16,7 +15,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   final ApiService _apiService = ApiService();
 
   Future<void> _syncChainDataToNotifications() async {
-    final chainResponse = await _apiService.checkChainSync('');
+    final chainResponse = await _apiService.blockchainSync('');
     if (chainResponse.ok && chainResponse.data != null && mounted) {
       context.read<NotificationProvider>().ingestChainData(chainResponse.data!);
     }
@@ -26,18 +25,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final token = context.read<AuthProvider>().sessionToken ?? '';
       await _syncChainDataToNotifications();
-      if (!mounted) return;
-      await context.read<NotificationProvider>().fetchNotifications(token);
     });
   }
 
-  Future<void> _onTopRefresh(String token) async {
+  Future<void> _onTopRefresh() async {
     if (ApiService.shouldRunTopChainRefresh()) {
       await _syncChainDataToNotifications();
     }
-    await context.read<NotificationProvider>().fetchNotifications(token);
   }
 
   Color _categoryColor(String category) {
@@ -118,12 +113,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       body: Consumer<NotificationProvider>(
         builder: (context, provider, child) {
           final notifications = provider.notifications;
-          final token = context.read<AuthProvider>().sessionToken ?? '';
-
-          if (provider.isLoading) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
           if (notifications.isEmpty) {
             return const Center(
               child: Text(
@@ -134,9 +123,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           }
 
           return RefreshIndicator(
-            onRefresh: () async {
-              await _onTopRefresh(token);
-            },
+            onRefresh: _onTopRefresh,
             child: ListView.separated(
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.symmetric(vertical: 8.0),

@@ -42,7 +42,7 @@ def serialize_block(db: Session, block) -> dict:
     return serialized
 
 
-def check_chain_sync(db: Session, client_block_hash: str | None) -> dict:
+def blockchain_sync(db: Session, client_block_hash: str | None) -> dict:
     normalized_client_hash = client_block_hash
     if normalized_client_hash in (None, "", "0"):
         normalized_client_hash = None

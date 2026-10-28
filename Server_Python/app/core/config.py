@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     # Co-located Elixir consensus engine (simbehaviour forwarding target).
     elixir_host: str | None = None
     elixir_http_port: int = 4001
+    block_transaction_threshold: int = 3
+    block_trigger_interval_seconds: int = 10
 
     log_level: str = "INFO"
 

@@ -44,19 +44,7 @@ class ApiService {
       throw ArgumentError('API_BASE_URL non valido: "$rawUrl"');
     }
 
-    final isHttp = uri.scheme.toLowerCase() == 'http';
-    if (isHttp && !_isLocalDevelopmentHost(uri.host)) {
-      throw ArgumentError(
-        'Endpoint HTTP non sicuro: "$rawUrl". Usa HTTPS per ambienti non locali.',
-      );
-    }
-
     return normalized;
-  }
-
-  static bool _isLocalDevelopmentHost(String host) {
-    final lower = host.toLowerCase();
-    return lower == 'localhost' || lower == '127.0.0.1' || lower == '10.0.2.2';
   }
 
   http.Client _buildHttpClient() {
@@ -188,17 +176,6 @@ class ApiService {
     return ApiResponse.error(_extractErrorMessage(body));
   }
 
-  Future<ApiResponse<Map<String, dynamic>>> getNotifications(
-    String sessionToken,
-  ) async {
-    final response = await _httpClient.post(
-      _buildUri('/api/v1/notify'),
-      headers: _headers,
-      body: jsonEncode({'session_token': sessionToken}),
-    );
-    return ApiResponse.fromJson(jsonDecode(response.body), (data) => data);
-  }
-
   Future<ApiResponse<void>> signupNewUser(
     String adminToken,
     String newName,
@@ -282,12 +259,12 @@ class ApiService {
     return ApiResponse.fromJson(jsonDecode(response.body), (_) {});
   }
 
-  Future<ApiResponse<Map<String, dynamic>>> checkChainSync(
+  Future<ApiResponse<Map<String, dynamic>>> blockchainSync(
     String clientBlockHash,
   ) async {
     try {
       final response = await _httpClient.post(
-        _buildUri('/api/v1/chain/check_chain_sync'),
+        _buildUri('/api/v1/chain/blockchain_sync'),
         headers: _headers,
         body: jsonEncode({'client_block_hash': clientBlockHash}),
       );
@@ -359,23 +336,17 @@ class ApiService {
     }
   }
 
-  Future<ApiResponse<Map<String, dynamic>>> addBlock(
+  Future<ApiResponse<Map<String, dynamic>>> addTransaction(
     String sessionToken,
-    String prevBlockHash,
-    Map<String, int> changes,
-    Map<String, Map<String, String?>> itemCatalog,
-    String authorSign,
+    Map<String, dynamic> transaction,
   ) async {
     try {
       final response = await _httpClient.post(
-        _buildUri('/api/v1/chain/add_block'),
+        _buildUri('/api/v1/chain/add_transaction'),
         headers: _headers,
         body: jsonEncode({
           'session_token': sessionToken,
-          'prev_block_hash': prevBlockHash.isEmpty ? null : prevBlockHash,
-          'changes': changes,
-          'item_catalog': itemCatalog,
-          'author_sign': authorSign,
+          'transaction': transaction,
         }),
       );
 
@@ -404,5 +375,65 @@ class ApiService {
     } catch (e) {
       return ApiResponse.error('Si è verificato un errore imprevisto: $e');
     }
+  }
+
+  Future<ApiResponse<Map<String, dynamic>>> getTransactionStatus(
+    String sessionToken,
+    String transactionId,
+  ) async {
+    try {
+      final response = await _httpClient.post(
+        _buildUri('/api/v1/chain/transaction_status'),
+        headers: _headers,
+        body: jsonEncode({
+          'session_token': sessionToken,
+          'tx_id': transactionId,
+        }),
+      );
+
+      Map<String, dynamic> body = {};
+      try {
+        body = jsonDecode(response.body) as Map<String, dynamic>;
+      } catch (_) {
+        body = {};
+      }
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return ApiResponse.fromJson(
+          body,
+          (data) => (data as Map).cast<String, dynamic>(),
+        );
+      }
+
+      return ApiResponse.error(
+        _extractErrorMessage(body).isNotEmpty
+            ? _extractErrorMessage(body)
+            : 'Errore del server: ${response.statusCode}',
+      );
+    } on SocketException {
+      return ApiResponse.error(
+        'Server blockchain non raggiungibile al $_baseUrl',
+      );
+    } catch (e) {
+      return ApiResponse.error('Si è verificato un errore imprevisto: $e');
+    }
+  }
+
+  Future<bool> waitForTransactionFinalization(
+    String sessionToken,
+    String transactionId, {
+    Duration timeout = const Duration(seconds: 30),
+    Duration pollInterval = const Duration(seconds: 1),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      final response = await getTransactionStatus(sessionToken, transactionId);
+      if (!response.ok) return false;
+      final status = response.data?['status']?.toString();
+      if (status == 'finalized') return true;
+      if (status == 'unknown') return false;
+      await Future<void>.delayed(pollInterval);
+    }
+    return false;
   }
 }

@@ -55,6 +55,125 @@ defmodule InventoryNode.ConsensusEngine do
     {:ok, start_round(state)}
   end
 
+  @impl true
+  def handle_cast(message, state) do
+    case message do
+      {:round_change, payload} ->
+        handle_cast_round_change(payload, state)
+
+      :trigger_block ->
+        handle_cast_trigger_block(state)
+
+      {:pre_prepare, height, round, proposer_id, block_data, signature} ->
+        handle_cast_pre_prepare(height, round, proposer_id, block_data, signature, state)
+
+      {:prepare_vote, height, round, block_hash, validator_id, signature} ->
+        handle_cast_prepare_vote(height, round, block_hash, validator_id, signature, state)
+
+      {:commit_proposal, height, round, proposer_id, block_data, proposer_signature,
+       prepare_signatures} ->
+        handle_cast_commit_proposal(
+          height,
+          round,
+          proposer_id,
+          block_data,
+          proposer_signature,
+          prepare_signatures,
+          state
+        )
+
+      {:commit_vote, height, round, proposer_id, block_data, proposer_signature,
+       prepare_signatures, block_hash, validator_id, signature} ->
+        handle_cast_commit_vote(
+          height,
+          round,
+          proposer_id,
+          block_data,
+          proposer_signature,
+          prepare_signatures,
+          block_hash,
+          validator_id,
+          signature,
+          state
+        )
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info(message, state) do
+    case message do
+      :round_timeout ->
+        handle_info_round_timeout(state)
+
+      {:verified_round_change, height, target_round, validator_id, true} ->
+        handle_info_verified_round_change(height, target_round, validator_id, state)
+
+      {:verified_round_change, _, _, validator_id, false} ->
+        handle_info_bad_round_change(validator_id, state)
+
+      {:verified_pre_prepare, height, round, proposer_id, block_data, proposer_signature, true} ->
+        handle_info_verified_pre_prepare(
+          height,
+          round,
+          proposer_id,
+          block_data,
+          proposer_signature,
+          state
+        )
+
+      {:verified_pre_prepare, _, _, proposer_id, _, _, false} ->
+        handle_info_bad_pre_prepare(proposer_id, state)
+
+      {:verified_prepare_vote, height, round, block_hash, validator_id, signature, true} ->
+        handle_info_verified_prepare_vote(height, round, block_hash, validator_id, signature, state)
+
+      {:verified_prepare_vote, _, _, _, validator_id, _, false} ->
+        handle_info_bad_prepare_vote(validator_id, state)
+
+      {:verified_commit_proposal, height, round, proposer_id, block_data, proposer_signature,
+       prepare_signatures, true} ->
+        handle_info_verified_commit_proposal(
+          height,
+          round,
+          proposer_id,
+          block_data,
+          proposer_signature,
+          prepare_signatures,
+          state
+        )
+
+      {:verified_commit_proposal, _, _, proposer_id, _, _, _, false} ->
+        handle_info_bad_commit_proposal(proposer_id, state)
+
+      {:verified_commit_vote, height, round, proposer_id, block_data, proposer_signature,
+       prepare_signatures, block_hash, validator_id, signature, true} ->
+        handle_info_verified_commit_vote(
+          height,
+          round,
+          proposer_id,
+          block_data,
+          proposer_signature,
+          prepare_signatures,
+          block_hash,
+          validator_id,
+          signature,
+          state
+        )
+
+      {:verified_commit_vote, _, _, _, _, _, _, _, validator_id, _, false} ->
+        handle_info_bad_commit_vote(validator_id, state)
+
+      {:broadcast_round_change, payload} ->
+        handle_info_broadcast_round_change(payload, state)
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
   # GESTIONE DEL ROUND E PROPOSER (ROUND-ROBIN)
 
   defp start_round(state) do
@@ -88,8 +207,7 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
-  @impl true
-  def handle_info(:round_timeout, state) do
+  defp handle_info_round_timeout(state) do
     if state.commit_started do
       Logger.warning(
         "COMMIT del blocco #{state.current_height} ancora in corso; attendo il quorum invece di cambiare round."
@@ -125,8 +243,7 @@ defmodule InventoryNode.ConsensusEngine do
 
   # ROUND CHANGE
 
-  @impl true
-  def handle_cast({:round_change, payload}, state) do
+  defp handle_cast_round_change(payload, state) do
     engine_pid = self()
     verification_payload = Map.put(payload, "flag", "verified_round_change")
 
@@ -147,8 +264,7 @@ defmodule InventoryNode.ConsensusEngine do
     {:noreply, state}
   end
 
-  @impl true
-  def handle_info({:verified_round_change, height, target_round, validator_id, true}, state) do
+  defp handle_info_verified_round_change(height, target_round, validator_id, state) do
     if height == state.current_height and target_round > state.current_round and
          not state.commit_started do
       current_votes = Map.get(state.round_change_votes, target_round, MapSet.new())
@@ -177,10 +293,21 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
-  def handle_info({:verified_round_change, _, _, validator_id, false}, state),
+  defp handle_info_bad_round_change(validator_id, state),
     do: ignore_bad_sig(validator_id, state)
 
   # FASE 1: PRE-PREPARE (proposta del leader)
+
+  defp handle_cast_trigger_block(state) do
+    proposer_index = rem(state.current_height + state.current_round, length(state.validators))
+    current_proposer = Enum.at(state.validators, proposer_index)
+
+    if current_proposer == state.node_id and is_nil(state.pending_block) do
+      {:noreply, propose_block(state)}
+    else
+      {:noreply, state}
+    end
+  end
 
   defp propose_block(state) do
     payload = %{
@@ -246,8 +373,7 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
-  @impl true
-  def handle_cast({:pre_prepare, height, round, proposer_id, block_data, signature}, state) do
+  defp handle_cast_pre_prepare(height, round, proposer_id, block_data, signature, state) do
     engine_pid = self()
 
     payload = %{
@@ -279,9 +405,12 @@ defmodule InventoryNode.ConsensusEngine do
     {:noreply, state}
   end
 
-  @impl true
-  def handle_info(
-        {:verified_pre_prepare, height, round, proposer_id, block_data, proposer_signature, true},
+  defp handle_info_verified_pre_prepare(
+        height,
+        round,
+        proposer_id,
+        block_data,
+        proposer_signature,
         state
       ) do
     expected_proposer = proposer_for(state, height, round)
@@ -335,13 +464,12 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
-  def handle_info({:verified_pre_prepare, _, _, proposer_id, _, _, false}, state),
+  defp handle_info_bad_pre_prepare(proposer_id, state),
     do: ignore_bad_sig(proposer_id, state)
 
   # FASE 2: PREPARE (il proposer riceve le firme in unicast dai nodi)
 
-  @impl true
-  def handle_cast({:prepare_vote, height, round, block_hash, validator_id, signature}, state) do
+  defp handle_cast_prepare_vote(height, round, block_hash, validator_id, signature, state) do
     engine_pid = self()
 
     proposer = proposer_for(state, height, round)
@@ -376,9 +504,12 @@ defmodule InventoryNode.ConsensusEngine do
     {:noreply, state}
   end
 
-  @impl true
-  def handle_info(
-        {:verified_prepare_vote, height, round, block_hash, validator_id, signature, true},
+  defp handle_info_verified_prepare_vote(
+        height,
+        round,
+        block_hash,
+        validator_id,
+        signature,
         state
       ) do
     if height == state.current_height and round == state.current_round and
@@ -409,15 +540,18 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
-  def handle_info({:verified_prepare_vote, _, _, _, validator_id, _, false}, state),
+  defp handle_info_bad_prepare_vote(validator_id, state),
     do: ignore_bad_sig(validator_id, state)
 
   # FASE 3: COMMIT (votazione separata dopo il certificato PREPARE)
 
-  @impl true
-  def handle_cast(
-        {:commit_proposal, height, round, proposer_id, block_data, proposer_signature,
-         prepare_signatures},
+  defp handle_cast_commit_proposal(
+        height,
+        round,
+        proposer_id,
+        block_data,
+        proposer_signature,
+        prepare_signatures,
         state
       ) do
     engine_pid = self()
@@ -463,10 +597,13 @@ defmodule InventoryNode.ConsensusEngine do
     {:noreply, state}
   end
 
-  @impl true
-  def handle_info(
-        {:verified_commit_proposal, height, round, proposer_id, block_data, proposer_signature,
-         prepare_signatures, true},
+  defp handle_info_verified_commit_proposal(
+        height,
+        round,
+        proposer_id,
+        block_data,
+        proposer_signature,
+        prepare_signatures,
         state
       ) do
     expected_proposer = proposer_for(state, height, round)
@@ -505,16 +642,19 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
-  def handle_info(
-        {:verified_commit_proposal, _, _, proposer_id, _, _, _, false},
-        state
-      ),
+  defp handle_info_bad_commit_proposal(proposer_id, state),
       do: ignore_bad_sig(proposer_id, state)
 
-  @impl true
-  def handle_cast(
-        {:commit_vote, height, round, proposer_id, block_data, proposer_signature,
-         prepare_signatures, block_hash, validator_id, signature},
+  defp handle_cast_commit_vote(
+        height,
+        round,
+        proposer_id,
+        block_data,
+        proposer_signature,
+        prepare_signatures,
+        block_hash,
+        validator_id,
+        signature,
         state
       ) do
     engine_pid = self()
@@ -568,10 +708,16 @@ defmodule InventoryNode.ConsensusEngine do
     {:noreply, state}
   end
 
-  @impl true
-  def handle_info(
-        {:verified_commit_vote, height, round, proposer_id, block_data, proposer_signature,
-         prepare_signatures, block_hash, validator_id, signature, true},
+  defp handle_info_verified_commit_vote(
+        height,
+        round,
+        proposer_id,
+        block_data,
+        proposer_signature,
+        prepare_signatures,
+        block_hash,
+        validator_id,
+        signature,
         state
       ) do
     cond do
@@ -624,10 +770,7 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
-  def handle_info(
-        {:verified_commit_vote, _, _, _, _, _, _, _, validator_id, _, false},
-        state
-      ),
+  defp handle_info_bad_commit_vote(validator_id, state),
       do: ignore_bad_sig(validator_id, state)
 
   defp start_commit_voting(
@@ -754,8 +897,7 @@ defmodule InventoryNode.ConsensusEngine do
     :ok
   end
 
-  @impl true
-  def handle_info({:broadcast_round_change, payload}, state) do
+  defp handle_info_broadcast_round_change(payload, state) do
     broadcast_to_all(state.peers, {:round_change, payload})
     {:noreply, state}
   end
@@ -820,13 +962,7 @@ defmodule InventoryNode.ConsensusEngine do
     Enum.each(peer_ids, fn peer_id ->
       {host, port} = Map.fetch!(peers, peer_id)
 
-      case Task.start(fn -> send_tcp(peer_id, host, port, data) end) do
-        {:ok, _pid} ->
-          :ok
-
-        {:error, reason} ->
-          Logger.error("Impossibile avviare l'invio al peer #{peer_id}: #{inspect(reason)}")
-      end
+      {:ok, _pid} = Task.start(fn -> send_tcp(peer_id, host, port, data) end)
     end)
 
     :ok

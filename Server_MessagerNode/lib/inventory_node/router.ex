@@ -64,6 +64,10 @@ defmodule InventoryNode.Router do
     peers = parse_peers(System.get_env("PEERS"))
 
     case payload do
+      # PYTHON BLOCK-TRIGGER OPERATION
+      %{"flag" => "trigger_block"} ->
+        GenServer.cast(InventoryNode.ConsensusEngine, :trigger_block)
+
       # TRANSACTION OPERATION
       %{"flag" => "transaction"} = transaction ->
         IO.puts(
@@ -198,13 +202,7 @@ defmodule InventoryNode.Router do
     data = :erlang.term_to_binary(message)
 
     Enum.each(peers, fn {peer_id, {host, port}} ->
-      case Task.start(fn -> send_tcp(peer_id, host, port, data) end) do
-        {:ok, _pid} ->
-          :ok
-
-        {:error, reason} ->
-          Logger.error("Impossibile avviare l'invio al peer #{peer_id}: #{inspect(reason)}")
-      end
+      {:ok, _pid} = Task.start(fn -> send_tcp(peer_id, host, port, data) end)
     end)
 
     :ok

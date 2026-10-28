@@ -4,6 +4,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import os
 from datetime import UTC, datetime
 from typing import Any
@@ -24,10 +25,79 @@ from app.db.models import ChainBlock, PendingTransaction
 from app.services import simbehaviour_service
 from app.services.cache_service import inventory_cache
 
+logger = logging.getLogger(__name__)
+
 
 class DistributedReject(AppError):
     def __init__(self, message: str, status_code: int = 400):
         super().__init__("DISTRIBUTED_REJECT", message, status_code)
+
+
+def trigger_block_if_ready(db: Session, *, force: bool = False) -> bool:
+    """Ask the local Elixir engine to start consensus when the Python policy allows it."""
+    if not repositories.get_pending_transactions(db):
+        return False
+    if not force and len(repositories.get_pending_transactions(db)) < settings.block_transaction_threshold:
+        return False
+    return _trigger_elixir_block()
+
+
+def _trigger_elixir_block() -> bool:
+    host = (settings.elixir_host or "").strip()
+    if not host:
+        return False
+    try:
+        import httpx
+
+        response = httpx.post(
+            f"http://{host}:{settings.elixir_http_port}/api/v1/python_call",
+            json={"flag": "trigger_block"},
+            timeout=3.0,
+        )
+        if response.status_code != 200:
+            logger.warning("Block trigger rejected by Elixir: HTTP %s", response.status_code)
+            return False
+        return True
+    except Exception as exc:
+        logger.warning("Block trigger failed: %s", exc)
+        return False
+
+
+def forward_transaction_to_elixir(transaction: dict[str, Any]) -> bool:
+    host = (settings.elixir_host or "").strip()
+    if not host:
+        return False
+    try:
+        import httpx
+
+        normalized = _normalize_client_transaction(transaction)
+        forwarded = {
+            key: value
+            for key, value in normalized.items()
+            if key not in {"signature", "pub_key", "from_node"}
+        }
+        forwarded.update(
+            {
+                "client_ID": normalized["from_node"],
+                "client_public_key": normalized["pub_key"],
+                "client_signature": normalized["signature"],
+            }
+        )
+        response = httpx.post(
+            f"http://{host}:{settings.elixir_http_port}/api/v1/python_call",
+            json={
+                **forwarded,
+                "flag": "transaction",
+            },
+            timeout=3.0,
+        )
+        if response.status_code != 200:
+            logger.warning("Transaction forwarding rejected by Elixir: HTTP %s", response.status_code)
+            return False
+        return True
+    except Exception as exc:
+        logger.warning("Transaction forwarding failed: %s", exc)
+        return False
 
 
 def canonical_json(value: Any) -> bytes:
@@ -41,13 +111,29 @@ def _transaction_id(transaction: dict[str, Any]) -> str:
     return value
 
 
+def _normalize_client_transaction(transaction: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(transaction)
+    if "client_ID" in transaction:
+        normalized["from_node"] = transaction["client_ID"]
+    if "client_public_key" in transaction:
+        normalized["pub_key"] = transaction["client_public_key"]
+    if "client_signature" in transaction:
+        normalized["signature"] = transaction["client_signature"]
+    return normalized
+
+
 def _verify_transaction_signature(transaction: dict[str, Any]) -> None:
-    public_key_text = transaction.get("pub_key")
-    signature_text = transaction.get("signature")
+    public_key_text = transaction.get("client_public_key", transaction.get("pub_key"))
+    signature_field = "client_signature" if "client_signature" in transaction else "signature"
+    signature_text = transaction.get(signature_field)
     if not isinstance(public_key_text, str) or not isinstance(signature_text, str):
         raise DistributedReject("Transaction is missing its public key or signature")
 
-    unsigned_transaction = {key: value for key, value in transaction.items() if key != "signature"}
+    unsigned_transaction = {
+        key: value
+        for key, value in transaction.items()
+        if key != signature_field
+    }
     try:
         public_key = Ed25519PublicKey.from_public_bytes(
             base64.b64decode(public_key_text, validate=True)
@@ -63,12 +149,13 @@ def _validate_transaction(transaction: Any) -> dict[str, Any]:
         raise DistributedReject("Each transaction must be an object")
     if transaction.get("flag") != "transaction":
         raise DistributedReject("Transaction flag must be 'transaction'")
-    _transaction_id(transaction)
+    normalized = _normalize_client_transaction(transaction)
+    _transaction_id(normalized)
     _verify_transaction_signature(transaction)
 
-    tx_type = transaction.get("tx_type")
-    item_id = transaction.get("item_id")
-    quantity = transaction.get("quantity")
+    tx_type = normalized.get("tx_type")
+    item_id = normalized.get("item_id")
+    quantity = normalized.get("quantity")
     if tx_type not in {"inbound", "outbound"}:
         raise DistributedReject("Transaction type must be inbound or outbound")
     if not isinstance(item_id, str) or not item_id.strip():
@@ -76,14 +163,14 @@ def _validate_transaction(transaction: Any) -> dict[str, Any]:
     if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
         raise DistributedReject("Transaction quantity must be a positive integer")
     for field in ("from_node", "location", "timestamp"):
-        if not isinstance(transaction.get(field), str) or not transaction[field].strip():
+        if not isinstance(normalized.get(field), str) or not normalized[field].strip():
             raise DistributedReject(f"Transaction {field} must not be empty")
-    catalog = transaction.get("item_catalog", {})
+    catalog = normalized.get("item_catalog", {})
     if not isinstance(catalog, dict):
         raise DistributedReject("Transaction item_catalog must be an object")
     if any(not isinstance(key, str) or not isinstance(value, dict) for key, value in catalog.items()):
         raise DistributedReject("Transaction item_catalog entries must be objects")
-    return transaction
+    return normalized
 
 
 def _transactions_in_chain(db: Session) -> set[str]:

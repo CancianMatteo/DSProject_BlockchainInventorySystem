@@ -24,9 +24,8 @@ services:
     build: 
       context: ./Server_Python
     container_name: bis_api_server_a # Nome univoco
-    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file:
-      - ./Server_Python/.env 
+      - ./.env
     environment:
       - NODE_ID=node_a
       - VALIDATOR_PRIVATE_KEY=${NODE_A_PRIVATE_KEY}
@@ -67,9 +66,8 @@ services:
     build: 
       context: ./Server_Python
     container_name: bis_api_server_b # Nome univoco
-    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file:
-      - ./Server_Python/.env 
+      - ./.env
     environment:
       - NODE_ID=node_b
       - VALIDATOR_PRIVATE_KEY=${NODE_B_PRIVATE_KEY}
@@ -87,6 +85,7 @@ services:
       node_b_internal:
         aliases:
           - python_validator
+      cluster_network:
 
   node_b:
     build: ./Server_MessagerNode
@@ -109,9 +108,8 @@ services:
     build: 
       context: ./Server_Python
     container_name: bis_api_server_c # Nome univoco
-    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file:
-      - ./Server_Python/.env 
+      - ./.env
     environment:
       - NODE_ID=node_c
       - VALIDATOR_PRIVATE_KEY=${NODE_C_PRIVATE_KEY}
@@ -129,6 +127,7 @@ services:
       node_c_internal:
         aliases:
           - python_validator
+      cluster_network:
 
   node_c:
     build: ./Server_MessagerNode
@@ -151,9 +150,8 @@ services:
     build: 
       context: ./Server_Python
     container_name: bis_api_server_d # Nome univoco
-    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file:
-      - ./Server_Python/.env 
+      - ./.env
     environment:
       - NODE_ID=node_d
       - VALIDATOR_PRIVATE_KEY=${NODE_D_PRIVATE_KEY}
@@ -172,6 +170,7 @@ services:
       node_d_internal:
         aliases:
           - python_validator
+      cluster_network:
 
   node_d:
     build: ./Server_MessagerNode

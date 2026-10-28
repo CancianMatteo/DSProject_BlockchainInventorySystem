@@ -2,10 +2,14 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.params import Query as QueryParam
 from sqlalchemy.orm import Session
 
-from app.api.schemas import AddBlockRequest, CheckChainSyncRequest
+from app.api.schemas import (
+    AddTransactionRequest,
+    CheckChainSyncRequest,
+    TransactionStatusRequest,
+)
 from app.db import repositories
 from app.db.session import get_db
-from app.services import chain_service, sync_service
+from app.services import auth_service, distributed_service, sync_service
 
 router = APIRouter(prefix="/chain", tags=["chain"])
 
@@ -36,20 +40,57 @@ def get_chain_history(
     }
 
 
-@router.post("/check_chain_sync")
-def check_chain_sync(payload: CheckChainSyncRequest, db: Session = Depends(get_db)):
-    data = sync_service.check_chain_sync(db, payload.client_block_hash)
+@router.post("/blockchain_sync")
+def blockchain_sync(payload: CheckChainSyncRequest, db: Session = Depends(get_db)):
+    data = sync_service.blockchain_sync(db, payload.client_block_hash)
     return {"ok": True, **data}
 
 
-@router.post("/add_block", status_code=201)
-def add_block(payload: AddBlockRequest, db: Session = Depends(get_db)):
-    data = chain_service.add_block(
-        db,
-        session_token=payload.session_token,
-        prev_block_hash=payload.prev_block_hash,
-        changes=payload.changes,
-        item_catalog=payload.item_catalog,
-        author_sign=payload.author_sign,
-    )
-    return {"ok": True, **data}
+@router.post("/add_transaction", status_code=202)
+def add_transaction(
+    payload: AddTransactionRequest,
+    db: Session = Depends(get_db),
+):
+    token = auth_service.validate_token(db, payload.session_token)
+    author_email = token.get("sub")
+    if not author_email:
+        raise distributed_service.DistributedReject(
+            "Invalid session token",
+            status_code=401,
+        )
+
+    transaction = dict(payload.transaction)
+    if transaction.get("client_ID", transaction.get("from_node")) != author_email:
+        raise distributed_service.DistributedReject(
+            "Transaction origin does not match the authenticated user",
+            status_code=403,
+        )
+
+    result = distributed_service.submit_transaction(db, transaction)
+    distributed_service.forward_transaction_to_elixir(transaction)
+    distributed_service.trigger_block_if_ready(db)
+    return {
+        "ok": True,
+        **result,
+        "confirm_pending_trans": result["status"] == "pending",
+    }
+
+
+@router.post("/transaction_status")
+def get_transaction_status(
+    payload: TransactionStatusRequest,
+    db: Session = Depends(get_db),
+):
+    token = auth_service.validate_token(db, payload.session_token)
+    if not token.get("sub"):
+        raise distributed_service.DistributedReject(
+            "Invalid session token",
+            status_code=401,
+        )
+
+    result = distributed_service.transaction_status(db, payload.tx_id)
+    return {
+        "ok": True,
+        **result,
+        "confirm_block_creation_for_trans": result["status"] == "finalized",
+    }

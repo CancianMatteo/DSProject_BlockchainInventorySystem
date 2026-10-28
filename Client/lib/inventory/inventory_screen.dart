@@ -4,10 +4,10 @@ import 'package:distr_bis/inventory/barcode_scanner_screen.dart';
 import 'package:distr_bis/inventory/confirmation_screen.dart';
 import 'package:distr_bis/inventory/widgets/category_filter_chip.dart';
 import 'package:distr_bis/inventory/widgets/inventory_list_item.dart';
-import 'package:distr_bis/models/api_response.dart' show ApiResponse;
 import 'package:distr_bis/models/inventory_item.dart';
 import 'package:distr_bis/notifications/notification_provider.dart';
 import 'package:distr_bis/services/api_service.dart';
+import 'package:distr_bis/services/transaction_signer.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
 
@@ -46,7 +46,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     try {
       final apiService = ApiService();
-      final response = await apiService.checkChainSync(
+      final response = await apiService.blockchainSync(
         forceFullSync ? '' : (_prevBlockHash ?? '0'),
       );
 
@@ -270,8 +270,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
       if (!mounted) return;
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       final sessionToken = authProvider.sessionToken ?? '';
-      const authorSign = 'signature'; // TODO: Implement cryptographic signature
-
       if (sessionToken.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -282,31 +280,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         return;
       }
 
-      final Map<String, int> changes = {};
-      _quantityChanges.forEach((itemId, change) {
-        if (change != 0) {
-          changes[itemId] = change;
-        }
-      });
-
-      final Map<String, Map<String, String?>> itemCatalog = {};
-      for (final entry in changes.entries) {
-        final itemId = entry.key;
-        try {
-          final item = _inventoryItems.firstWhere((i) => i.id == itemId);
-          itemCatalog[itemId] = {
-            'itemName': item.name,
-            'brand': item.brand,
-            'itemType': item.itemType,
-            'category': item.category,
-            'barcode': item.barcode,
-          };
-        } catch (_) {
-          // Ignore dangling changes for unknown ids.
-        }
-      }
-
-      if (changes.isEmpty) {
+      if (_quantityChanges.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Nessuna variazione di quantita da applicare.'),
@@ -316,16 +290,64 @@ class _InventoryScreenState extends State<InventoryScreen> {
         return;
       }
 
-      ApiResponse<Map<String, dynamic>> response;
+      var allFinalized = true;
       try {
         final apiService = ApiService();
-        response = await apiService.addBlock(
-          sessionToken,
-          (_prevBlockHash?.isNotEmpty ?? false) ? _prevBlockHash! : '',
-          changes,
-          itemCatalog,
-          authorSign,
-        );
+        final transactionIds = <String>[];
+        for (final entry in _quantityChanges.entries) {
+          final change = entry.value;
+          if (change == 0) continue;
+          final item = _inventoryItems.firstWhere((i) => i.id == entry.key);
+          final transactionId = _uuid.v4();
+          final transaction = await TransactionSigner.sign({
+            'flag': 'transaction',
+            'client_ID': authProvider.user?.email ?? '',
+            'tx_type': change > 0 ? 'inbound' : 'outbound',
+            'item_id': item.id,
+            'quantity': change.abs(),
+            'location': 'warehouse-1',
+            'timestamp': DateTime.now().toUtc().toIso8601String(),
+            'tx_id': transactionId,
+            'item_catalog': {
+              item.id: {
+                'itemName': item.name,
+                'brand': item.brand,
+                'itemType': item.itemType,
+                'category': item.category,
+                'barcode': item.barcode,
+              },
+            },
+          }, sessionToken);
+          final response = await apiService.addTransaction(
+            sessionToken,
+            transaction.transaction,
+          );
+          if (!response.ok) {
+            throw Exception(response.errorMessage ?? 'Transaction rejected');
+          }
+          transactionIds.add(transactionId);
+        }
+
+        // Submit the complete batch before waiting for consensus so the
+        // transaction threshold can be reached.
+        for (final transactionId in transactionIds) {
+          final finalized = await apiService.waitForTransactionFinalization(
+            sessionToken,
+            transactionId,
+          );
+          allFinalized = allFinalized && finalized;
+        }
+
+        if (!allFinalized && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Transazioni accettate, ma il blocco non e ancora stato confermato.',
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
       } catch (e) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -338,31 +360,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
       }
 
       if (!mounted) return;
-
-      if (response.ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Modifiche applicate con successo!'),
-            backgroundColor: Colors.green,
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            allFinalized
+                ? 'Transazioni confermate nel blocco.'
+                : 'Transazioni aggiunte al mempool.',
           ),
-        );
-        setState(() {
-          _quantityChanges.clear();
-          _newItems.clear();
-          _isApplyButtonEnabled = false;
-        });
-        _fetchInventory();
-      } else {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              "Errore durante l'applicazione delle modifiche: ${response.errorMessage}",
-            ),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+          backgroundColor: allFinalized ? Colors.green : Colors.orange,
+        ),
+      );
+      setState(() {
+        _quantityChanges.clear();
+        _newItems.clear();
+        _isApplyButtonEnabled = false;
+      });
+      _fetchInventory();
     }
   }
 
@@ -388,11 +401,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
         );
         _newItems.add(newItem);
         _inventoryItems.add(newItem);
+        _quantityChanges[newItem.id] = 1;
+        _isApplyButtonEnabled = true;
         if (!_categories.contains(newItem.category)) {
           _categories = _extractCategories();
         }
       });
-      _updateApplyButtonState();
     }
   }
 

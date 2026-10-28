@@ -65,7 +65,7 @@ L'applicazione utilizza una barra di navigazione inferiore fissa a 4 sezioni.
 ### Bug Fixes
 
 - **Inventory Loading:** Fixed the perpetual loading issue by:
-    - Passing the session token in the `checkChainSync` API call.
+    - Passing the session token in the `blockchainSync` API call.
     - Adding robust `try-catch-finally` error handling to the `_fetchInventory` method.
     - Including the `X-App-Token` in all API requests.
 - **`avoid_returning_null_for_void`:** Fixed in `api_service.dart`.

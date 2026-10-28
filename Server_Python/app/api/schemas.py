@@ -18,10 +18,6 @@ class ResetLoginWithOtpRequest(BaseModel):
     new_pwd: str = Field(min_length=8, max_length=256)
 
 
-class NotifyRequest(BaseModel):
-    session_token: str
-
-
 class SignupRequest(BaseModel):
     admin_token: str
     new_name: str = Field(min_length=1, max_length=100)
@@ -62,13 +58,14 @@ class CheckChainSyncRequest(BaseModel):
     client_block_hash: str | None = Field(default=None, min_length=0, max_length=128)
 
 
-class AddBlockRequest(BaseModel):
-    block: dict[str, Any] | None = None
-    votes: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class SubmitTransactionRequest(BaseModel):
+class AddTransactionRequest(BaseModel):
+    session_token: str
     transaction: dict[str, Any]
+
+
+class TransactionStatusRequest(BaseModel):
+    session_token: str
+    tx_id: str = Field(min_length=1, max_length=128)
 
 
 class BuildProposalRequest(BaseModel):

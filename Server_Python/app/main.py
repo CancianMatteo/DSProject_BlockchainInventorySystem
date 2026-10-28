@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import asyncio
 import json
 
 from fastapi import FastAPI, Request
@@ -6,7 +7,6 @@ from fastapi.responses import JSONResponse
 from app.api.routes_auth import router as auth_router
 from app.api.routes_chain import router as chain_router
 from app.api.routes_health import router as health_router
-from app.api.routes_notifications import router as notifications_router
 from app.api.routes_python import router as python_router
 from app.api.routes_simbehaviour import router as simbehaviour_router
 from app.api.routes_users import router as users_router
@@ -16,6 +16,7 @@ from app.core.logging import configure_logging
 from app.db import repositories
 from app.db.session import Base, SessionLocal, engine
 from app.services.cache_service import inventory_cache
+from app.services import distributed_service
 from app.services import simbehaviour_service
 from app.services import user_service
 
@@ -67,7 +68,22 @@ async def lifespan(_: FastAPI):
     finally:
         db.close()
 
-    yield
+    trigger_task = asyncio.create_task(_block_trigger_loop())
+    try:
+        yield
+    finally:
+        trigger_task.cancel()
+        await asyncio.gather(trigger_task, return_exceptions=True)
+
+
+async def _block_trigger_loop() -> None:
+    while True:
+        await asyncio.sleep(settings.block_trigger_interval_seconds)
+        db = SessionLocal()
+        try:
+            distributed_service.trigger_block_if_ready(db, force=True)
+        finally:
+            db.close()
 
 
 app = FastAPI(title="Blockchain Inventory System Backend", lifespan=lifespan)
@@ -119,7 +135,6 @@ async def simbehaviour_gate(request: Request, call_next):
 
 
 app.include_router(auth_router, prefix=settings.api_prefix)
-app.include_router(notifications_router, prefix=settings.api_prefix)
 app.include_router(users_router, prefix=settings.api_prefix)
 app.include_router(chain_router, prefix=settings.api_prefix)
 app.include_router(python_router, prefix=settings.api_prefix)

@@ -181,45 +181,6 @@ Errors:
 - 401 invalid OTP or invalid reset request
 - 429 too many reset attempts for the day
 
-### 3.1.3 POST /notify
-
-Purpose:
-- Poll unread in-app notifications for the logged-in user.
-
-Request:
-```json
-{
-	"session_token": "..."
-}
-```
-
-Response 200:
-```json
-{
-	"ok": true,
-	"notifications": [
-		{
-			"id": 12,
-			"category": "security",
-			"message": "User alice@example.com exceeded OTP reset attempts limit",
-			"details": {
-				"time_utc": "2026-03-18T12:10:11+00:00",
-				"involved_user": "alice@example.com",
-				"executor_ip": "203.0.113.42",
-				"attempts_today": 11,
-				"event": "EXCESSIVE_OTP_RESET_ATTEMPTS"
-			},
-			"created_at": "2026-03-18T12:10:11+00:00"
-		}
-	]
-}
-```
-
-Notes:
-- Endpoint is pull-based so clients can poll notifications.
-- Returned notifications are marked as read.
-- Endpoint requires a valid `session_token`; users receive only notifications addressed to their own account.
-
 ### 3.2 POST /users/signup_new_user
 
 Purpose:
@@ -343,7 +304,7 @@ Errors:
 - 404 user not found
 - 500 internal error
 
-### 3.5 POST /chain/check_chain_sync
+### 3.5 POST /chain/blockchain_sync
 
 Purpose:
 - Check if client chain tip is aligned with server chain.
@@ -397,52 +358,94 @@ Errors:
 - 400 invalid hash
 - 500 internal error
 
-### 3.6 POST /chain/add_block
+### 3.6 POST /chain/add_transaction
 
 Purpose:
-- Validate, sign, persist, and apply a new block.
+- Authenticate and add one signed inventory transaction to this node's mempool.
+- The transaction remains pending until a quorum-confirmed block is written.
 
 Request:
 ```json
 {
 	"session_token": "...",
-	"prev_block_hash": "...",
-	"changes": {
-		"item_1": -3,
-		"item_2": 10
-	},
-	"author_sign": "optional_client_signature"
+	"transaction": {
+		"flag": "transaction",
+		"client_ID": "user@example.com",
+		"tx_type": "inbound",
+		"item_id": "item_1",
+		"quantity": 3,
+		"location": "warehouse-1",
+		"timestamp": "2026-10-25T11:00:00Z",
+		"tx_id": "uuid",
+		"client_public_key": "base64-ed25519-public-key",
+		"signature": "base64-ed25519-signature",
+		"item_catalog": {
+			"item_1": {
+				"itemName": "Example",
+				"brand": "Example brand",
+				"category": "General"
+			}
+		}
+	}
 }
 ```
 
 Controller validation:
-1. Validate session token.
-2. Validate payload schema and non-empty `changes`.
-3. Ensure `prev_block_hash` equals current latest hash.
-4. Simulate balance update on cache snapshot:
-	 - each resulting quantity must be >= 0
-	 - unknown item allowed only if delta > 0
-5. Build canonical block payload and compute `block_hash`.
-6. Sign block server-side (`server_sign`).
-7. Write block in DB transaction.
-8. Commit and update in-memory cache atomically.
+1. Validate the session token and require `client_ID` to match its subject.
+2. Verify the Ed25519 signature over canonical JSON excluding `signature`, using
+   `client_public_key`.
+3. Validate quantity, inventory transition, item metadata, and transaction ID.
+4. Insert the transaction into `pending_transactions` with status `pending`.
+5. Forward the accepted transaction to the local Elixir messenger.
 
-Response 201:
+Response 202:
 ```json
 {
 	"ok": true,
-	"block_hash": "...",
-	"n_block": 42,
-	"new_head_hash": "..."
+	"tx_id": "uuid",
+	"status": "pending",
+	"duplicate": false,
+	"confirm_pending_trans": true
 }
 ```
 
-Errors:
-- 400 invalid request
-- 401 invalid token
-- 409 chain head mismatch (client stale)
-- 422 invalid inventory transition (negative quantity)
-- 500 internal error
+Blocks are triggered by the Python container only: reaching
+`BLOCK_TRANSACTION_THRESHOLD` triggers immediately, while any pending
+transaction triggers after `BLOCK_TRIGGER_INTERVAL_SECONDS`. Python signals
+the local Elixir consensus engine, which proposes and commits the block.
+
+### 3.6.1 POST /chain/transaction_status
+
+Purpose:
+- Confirm whether an accepted transaction is still pending or has been included
+  in a quorum-confirmed block.
+
+Request:
+```json
+{
+	"session_token": "...",
+	"tx_id": "uuid"
+}
+```
+
+Response 200:
+```json
+{
+	"ok": true,
+	"tx_id": "uuid",
+	"status": "finalized",
+	"confirm_block_creation_for_trans": true
+}
+```
+
+The client polls this endpoint after `add_transaction`. A `pending` status
+means the transaction is in the mempool; `finalized` means its block has been
+written. Unknown transaction IDs are returned with status `unknown`.
+
+### 3.5.1 POST /chain/blockchain_sync
+
+This is the canonical client synchronization endpoint. It accepts and returns
+the synchronization payload described above.
 
 ### 3.7 GET /chain/history
 
@@ -528,7 +531,7 @@ Startup:
 2. Replay `changes_json` into `inventory_cache`.
 3. Set `latest_block_hash` and `latest_block_number`.
 
-On successful `add_block`:
+On successful quorum-confirmed block:
 1. Persist block in DB transaction.
 2. Apply changes to cache only after DB commit.
 3. Update head hash/number.
@@ -644,7 +647,6 @@ Auth&Blockchain server/
 		services/
 			auth_service.py
 			user_service.py
-			chain_service.py
 			sync_service.py
 			email_service.py
 			cache_service.py
@@ -670,10 +672,10 @@ Alignment with app blueprint:
 - Auth screens call `/auth/login`.
 - Password recovery flow calls `/auth/forgot_pwd` then `/auth/reset_login_with_otp`.
 - Admin workflows call `/users/signup_new_user` and `/users/remove_user`.
-- Inventory apply action calls `/chain/add_block`.
+- Inventory apply action calls `/chain/add_transaction` once per changed item.
 - Chain log screen uses paginated `GET /chain/history`; chain synchronization
-  continues to use `/chain/check_chain_sync`.
-- Clients poll `/notify` to receive new in-app notifications.
+  continues to use `/chain/blockchain_sync`.
+- Inventory notifications are derived locally from confirmed chain data.
 
 API conventions for client consistency:
 - All responses include `ok` boolean.
@@ -702,13 +704,12 @@ API conventions for client consistency:
 - [ ] `POST /api/v1/auth/login`
 - [ ] `POST /api/v1/auth/forgot_pwd`
 - [ ] `POST /api/v1/auth/reset_login_with_otp`
-- [ ] `POST /api/v1/notify`
 - [ ] `POST /api/v1/users/signup_new_user`
 - [ ] `POST /api/v1/users/remove_user`
 - [ ] `POST /api/v1/users/change_user_pwd`
-- [ ] `POST /api/v1/chain/check_chain_sync`
+- [ ] `POST /api/v1/chain/blockchain_sync`
 - [ ] `GET /api/v1/chain/history`
-- [ ] `POST /api/v1/chain/add_block`
+- [ ] `POST /api/v1/chain/add_transaction`
 - [ ] `GET /api/v1/health/live`
 - [ ] `GET /api/v1/health/ready`
 

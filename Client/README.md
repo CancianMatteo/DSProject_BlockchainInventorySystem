@@ -2,8 +2,7 @@
 
 ## HTTP and build-time flavors
 
-The app communicates with the backend over plain HTTP, which does not encrypt
-credentials (priv_key never exchanged in the network) or inventory data in transit.
+The app communicates with the backend over plain HTTP for this demo project.
 
 You can switch endpoints at build time using flavors:
 

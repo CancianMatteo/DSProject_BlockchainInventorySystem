@@ -1,14 +1,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:distr_bis/notifications/notification_model.dart';
-import 'package:distr_bis/services/api_service.dart';
 
 class NotificationProvider with ChangeNotifier {
-  final ApiService _apiService = ApiService();
   final List<AppNotification> _notifications = [];
-  bool _isLoading = false;
-
   List<AppNotification> get notifications => _notifications;
-  bool get isLoading => _isLoading;
 
   bool get hasUnreadNotifications => _notifications.any((n) => !n.isRead);
 
@@ -114,42 +109,6 @@ class NotificationProvider with ChangeNotifier {
     }
 
     _notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-    notifyListeners();
-  }
-
-  Future<void> fetchNotifications(String sessionToken) async {
-    if (sessionToken.isEmpty) return;
-    _isLoading = true;
-    notifyListeners();
-
-    final response = await _apiService.getNotifications(sessionToken);
-    if (response.ok && response.data != null) {
-      final existingReadById = <String, bool>{
-        for (final n in _notifications) n.id: n.isRead,
-      };
-
-      final local = _notifications
-          .where((n) => n.id.startsWith('local-'))
-          .toList();
-      final raw = response.data!['notifications'] as List<dynamic>? ?? [];
-      final serverSecurity = raw
-          .whereType<Map<String, dynamic>>()
-          .map(AppNotification.fromServer)
-          .where((n) => n.category.toLowerCase() == 'security')
-          .toList();
-
-      _notifications
-        ..clear()
-        ..addAll(local)
-        ..addAll(serverSecurity)
-        ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
-
-      for (final n in _notifications) {
-        n.isRead = existingReadById[n.id] ?? false;
-      }
-    }
-
-    _isLoading = false;
     notifyListeners();
   }
 

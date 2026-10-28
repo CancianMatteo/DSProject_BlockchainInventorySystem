@@ -27,7 +27,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final currentEmail = authProvider.user?.email;
-    final response = await _apiService.checkChainSync('');
+    final response = await _apiService.blockchainSync('');
 
     if (!mounted) return;
 
