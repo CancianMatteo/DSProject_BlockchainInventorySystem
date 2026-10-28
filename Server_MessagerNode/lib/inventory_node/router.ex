@@ -88,54 +88,6 @@ defmodule InventoryNode.Router do
             Logger.error("Invio transazione a Python fallito: #{inspect(reason)}")
         end
 
-      # KEYS SETUP OPERATION
-      {:setup_keys} ->
-        IO.puts("Setup delle chiavi pubbliche e private per la crittografia")
-
-        case send_to_python_service(
-               %{"flag" => "setup_keys", "from_node" => node_id()},
-               python_host,
-               python_port
-             ) do
-          {:ok, %{"flag" => "setup_keys", "pub_key" => pub_key}} ->
-            broadcast_to_peers(peers, {:setup_keys_warning, node_id(), pub_key})
-
-          {:ok, %{"flag" => "error", "reason" => reason}} ->
-            {:error, reason}
-
-          {:ok, _} ->
-            {:error, "Risposta Python malformata"}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      # KEYS SETUP WARNING OPERATION
-      {:setup_keys_warning, from_node, pub_key} ->
-        IO.puts("Ricevuto avviso di setup chiavi da #{inspect(from_node)}")
-
-        case send_to_python_service(
-               %{
-                 "flag" => "setup_keys_warning",
-                 "from_node" => to_string(from_node),
-                 "pub_key" => pub_key
-               },
-               python_host,
-               python_port
-             ) do
-          {:ok, %{"flag" => "setup_keys_warning", "status" => "success"}} ->
-            IO.puts("Chiave pubblica del nodo #{inspect(from_node)} registrata correttamente.")
-
-          {:ok, %{"flag" => "error", "reason" => reason}} ->
-            {:error, reason}
-
-          {:ok, _} ->
-            {:error, "Risposta Python malformata"}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
       # ROUND CHANGE OPERATION
       {:round_change, round_payload} ->
         GenServer.cast(InventoryNode.ConsensusEngine, {:round_change, round_payload})

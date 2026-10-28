@@ -1,5 +1,4 @@
 defmodule InventoryNode.Application do
-
   use Application
 
   @impl true

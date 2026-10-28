@@ -23,16 +23,6 @@ def python_call(
     """
     flag = payload.get("flag")
 
-    # --- Scambio delle chiavi dei nodi (all'avvio del cluster) ---
-    if flag == "setup_keys":
-        return {"flag": "setup_keys", "pub_key": distributed_service.local_public_key()}
-
-    if flag == "setup_keys_warning":
-        distributed_service.register_peer_public_key(
-            payload.get("from_node"), payload.get("pub_key")
-        )
-        return {"flag": "setup_keys_warning", "status": "success"}
-
     # --- Transazioni (mempool) ---
     if flag == "transaction":
         result = distributed_service.submit_transaction(db, payload)

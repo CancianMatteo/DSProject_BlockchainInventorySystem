@@ -21,11 +21,17 @@ crittografiche.
 
 ## Identità, chiavi e serializzazione
 
-Le chiavi pubbliche dei validatori devono essere disponibili al servizio
-Python nel registro dei validatori (`VALIDATOR_PUBLIC_KEYS`) oppure tramite
-`setup_keys_warning`. Una chiave configurata ha precedenza su una chiave
-ricevuta dinamicamente. Il `validator_id` usato dal nodo deve coincidere con
-l'identità associata alla chiave pubblica.
+Gli ID dei validatori sono configurati staticamente tramite `NODE_ID` e gli
+indirizzi `PEERS` di Elixir. Ogni backend riceve la propria chiave privata
+Ed25519 Base64 in `VALIDATOR_PRIVATE_KEY`; tutti ricevono lo stesso oggetto
+`VALIDATOR_PUBLIC_KEYS`, che associa ogni ID alla chiave pubblica corrispondente.
+Non esistono endpoint o messaggi di scambio iniziale: le chiavi devono essere
+configurate correttamente prima dell'avvio. Il `validator_id` deve coincidere
+con l'ID del nodo e con la chiave associata nel registro statico.
+
+Compose fornisce anche `SERVER_SIGN_PRIVATE_KEY` per la firma delle risposte
+server. In questo progetto viene impostata sulla chiave privata Ed25519 del
+validatore locale, a meno che non si configuri una chiave server separata.
 
 Python serializza i contenuti firmati in JSON canonico (chiavi ordinate e
 separatori deterministici) e usa firme Ed25519 codificate in Base64. Il
@@ -117,8 +123,6 @@ fittizio.
 
 | `flag` richiesta | Operazione Python | Risposta attesa |
 |---|---|---|
-| `setup_keys` | Restituire la chiave pubblica locale; la chiave privata resta locale al servizio. | `{"flag":"setup_keys","pub_key":"<base64>"}` |
-| `setup_keys_warning` | Validare e registrare la chiave pubblica del peer. | `{"flag":"setup_keys_warning","status":"success"}` |
 | `transaction` | Validare la firma del client, validare la transazione e inserirla idempotentemente nella mempool. Non alterare i campi firmati. | Transazione ricevuta con `status` e `duplicate`. |
 | `prepare_block` | Ordinare le transazioni pendenti e preparare il blocco successivo per il round richiesto. Firmare la coppia altezza/round/proposer/hash. | `{"flag":"prepare_block","block_data":{...},"proposer_sign":"<base64>"}`; se la mempool è vuota `block_data` è `null`. |
 | `pre_prepare` | Verificare il blocco, il suo hash, il proposer atteso e la firma della proposta. | `{"status":true}` oppure `{"status":false}`. |

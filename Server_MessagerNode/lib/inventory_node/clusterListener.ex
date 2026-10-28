@@ -7,11 +7,8 @@ defmodule InventoryNode.ClusterListener do
   end
 
   def listen(port) do
-
     {:ok, socket} = :gen_tcp.listen(port, [:binary, packet: 4, active: false, reuseaddr: true])
     Logger.info("Cluster Listener (Erlang) in ascolto sulla porta #{port}")
-    msg = {:setup_keys} # setup iniziale delle chiavi pubbliche tra nodi
-    Task.start(fn -> InventoryNode.Router.handle_payload(msg) end)
 
     loop_acceptor(socket)
   end
@@ -42,7 +39,8 @@ defmodule InventoryNode.ClusterListener do
 
         handle_connection(client)
 
-      {:error, _} -> :ok
+      {:error, _} ->
+        :ok
     end
   end
 end

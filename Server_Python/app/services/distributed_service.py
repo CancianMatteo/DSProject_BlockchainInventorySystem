@@ -10,7 +10,6 @@ from typing import Any
 from uuid import uuid4
 
 from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -240,7 +239,7 @@ def _configured_validator_keys() -> dict[str, str]:
             raise DistributedReject("Validator public-key configuration is invalid", 500) from exc
     if not isinstance(configured, dict):
         raise DistributedReject("Validator public-key configuration must be an object", 500)
-    return {**peer_public_keys, **configured}
+    return configured
 
 
 def _verify_votes(block: dict[str, Any], votes: Any) -> list[dict[str, Any]]:
@@ -455,8 +454,6 @@ def transaction_status(db: Session, tx_id: str) -> dict[str, Any]:
 # consenso (dispatched by "flag" dall'endpoint /api/v1/python_call).
 # ---------------------------------------------------------------------------
 
-# Chiavi pubbliche dei peer ricevute via setup_keys_warning (registro volatile).
-peer_public_keys: dict[str, str] = {}
 _BYZANTINE_SCENARIOS = {
     "invalid_signature",
     "split_brain",
@@ -500,41 +497,6 @@ def _spoof_transaction(base: dict[str, Any], node_id: str) -> dict[str, Any]:
     forged.pop("signature", None)
     forged["signature"] = base64.b64encode(os.urandom(64)).decode("ascii")
     return forged
-
-
-def local_public_key() -> str:
-    if (
-        simbehaviour_service.is_byzantine()
-        and _byzantine_scenario() == "invalid_signature"
-    ):
-        # Advertise an unrelated key so honest nodes cannot match this node
-        # to its registered validator identity.
-        decoy = Ed25519PrivateKey.generate()
-        return base64.b64encode(
-            decoy.public_key().public_bytes(
-                serialization.Encoding.Raw,
-                serialization.PublicFormat.Raw,
-            )
-        ).decode("ascii")
-    public_keys = _configured_validator_keys()
-    public_key = public_keys.get(settings.node_id)
-    if not isinstance(public_key, str) or not public_key:
-        raise DistributedReject(
-            f"No validator public key configured for node {settings.node_id}", 500
-        )
-    return public_key
-
-
-def register_peer_public_key(from_node: Any, public_key: Any) -> None:
-    if not isinstance(from_node, str) or not from_node.strip():
-        raise DistributedReject("Peer node id must not be empty")
-    if not isinstance(public_key, str) or not public_key.strip():
-        raise DistributedReject("Peer public key must not be empty")
-    try:
-        base64.b64decode(public_key, validate=True)
-    except (ValueError, binascii.Error) as exc:
-        raise DistributedReject("Peer public key must be base64 encoded") from exc
-    peer_public_keys[from_node] = public_key
 
 
 def _validator_private_key() -> Ed25519PrivateKey:
