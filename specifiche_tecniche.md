@@ -46,10 +46,30 @@ in Python. Per un'altezza `height` e un round `round`, il proposer atteso è
 `validators[(height + round) mod numero_validatori]`. Con `N = 3f + 1`, il
 quorum è `2f + 1`.
 
+Python controlla periodicamente la mempool: quando ci sono almeno 500
+transazioni pendenti, oppure ci sono transazioni pendenti e sono trascorsi 15
+minuti dall'ultimo blocco committato (dall'avvio, se la chain è vuota), invia
+`POST /api/v1/proposal_request` al nodo Elixir locale. Elixir risponde
+`accepted: true` e avvia il normale PRE-PREPARE solo se è il proposer del round
+corrente e non sta già gestendo un blocco. Se non è leader, Python ritenta al
+controllo successivo. Ogni blocco contiene al massimo 500 transazioni.
+
+Il timeout di round è 8000 ms. Il timeout non cambia da solo il proposer:
+ciascun nodo firma e diffonde `ROUND_CHANGE`, e il round avanza solo quando è
+raggiunto il quorum BFT. Una nuova proposta riparte dal normale flusso di
+consenso e non salta le verifiche o le fasi di commit.
+
+All'avvio, Elixir chiede a Python `chain_state` e imposta l'altezza corrente a
+`next_height` restituita dal database locale (`ultimo blocco + 1`, oppure 1 se
+la chain è vuota). Se Python non è ancora raggiungibile o la risposta non è
+valida, Elixir ritenta e non avvia i round finché non ha uno stato valido.
+
 ### 1. Avvio del round e PRE-PREPARE
 
-1. Elixir avvia il timer del round e calcola il proposer.
-2. Se è il proposer, chiede a Python di preparare un blocco.
+1. Elixir avvia il timeout BFT di 8000 ms e calcola il proposer.
+2. Python invia il trigger di proposta quando è raggiunta una delle soglie.
+   Elixir concede la proposta solo al proposer attuale; a quel punto chiede a
+   Python di preparare il blocco.
 3. Python costruisce il blocco dalla mempool, lo firma come proposer e
    restituisce blocco e firma.
 4. Prima di inviare la proposta, il proposer chiede a Python anche la propria
@@ -123,6 +143,7 @@ fittizio.
 
 | `flag` richiesta | Operazione Python | Risposta attesa |
 |---|---|---|
+| `chain_state` | Leggere l'ultimo blocco committato per inizializzare l'altezza del motore Elixir. | `{"next_height":2}`; restituisce `1` quando la chain è vuota. |
 | `transaction` | Validare la firma del client, validare la transazione e inserirla idempotentemente nella mempool. Non alterare i campi firmati. | Transazione ricevuta con `status` e `duplicate`. |
 | `prepare_block` | Ordinare le transazioni pendenti e preparare il blocco successivo per il round richiesto. Firmare la coppia altezza/round/proposer/hash. | `{"flag":"prepare_block","block_data":{...},"proposer_sign":"<base64>"}`; se la mempool è vuota `block_data` è `null`. |
 | `pre_prepare` | Verificare il blocco, il suo hash, il proposer atteso e la firma della proposta. | `{"status":true}` oppure `{"status":false}`. |
@@ -311,7 +332,7 @@ container Elixir e in quello Python del nodo bizantino:
 | `split_brain` | Il proposer invia `commit_proposal` solo ai primi due peer ordinati e non vota COMMIT. I voti COMMIT dei peer portano il certificato PREPARE e vengono diffusi a tutti. | I peer non informati verificano la prova e votano COMMIT; ogni nodo scrive solo dopo aver contato `2f+1` voti. |
 | `equivocation` | Il proposer invia due blocchi distinti, entrambi firmati, a due partizioni. Il blocco alternativo contiene un sottoinsieme delle transazioni del blocco principale, con la stessa altezza e lo stesso parent. | Ogni validatore onesto fissa una sola proposta per altezza/round e segnala le due firme del proposer; non firma entrambi i blocchi. |
 | `leader_offline` | Il proposer invia PRE-PREPARE e raccoglie PREPARE, ma non invia `commit_proposal` né il proprio `ROUND_CHANGE`. | In assenza di voti COMMIT, i nodi onesti raggiungono il quorum `ROUND_CHANGE` dopo il timeout e passano al round successivo. |
-| `invalid_signature` | Mantiene la simulazione precedente: il nodo altera una proposta e usa firme non verificabili. | Le firme e gli hash invalidi vengono rifiutati. |
+| `invalid_signature` | Il blocco mantiene dati e hash coerenti, ma il nodo bizantino genera firme di consenso non verificabili (inclusa la firma del proposer). | I peer rifiutano le firme invalide; i validatori onesti possono comunque raggiungere il quorum `2f+1`. |
 
 Il valore predefinito è `invalid_signature`. Lo scenario `equivocation`
 richiede almeno due transazioni pendenti; con meno di due, l'endpoint

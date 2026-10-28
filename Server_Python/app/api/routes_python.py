@@ -32,6 +32,9 @@ def python_call(
             "duplicate": result["duplicate"],
         }
 
+    if flag == "chain_state":
+        return distributed_service.chain_state(db)
+
     # --- Proposta del leader (PRE-PREPARE) ---
     if flag == "prepare_block":
         round_number = payload.get("round")

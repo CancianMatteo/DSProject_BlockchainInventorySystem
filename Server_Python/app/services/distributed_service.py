@@ -22,6 +22,7 @@ from app.db import repositories
 from app.db.models import ChainBlock, PendingTransaction
 from app.services import simbehaviour_service
 from app.services.cache_service import inventory_cache
+from app.services.proposal_trigger_service import MAX_BLOCK_TRANSACTIONS
 
 
 class DistributedReject(AppError):
@@ -219,7 +220,9 @@ def build_proposal(db: Session, round_number: int) -> dict[str, Any]:
         return {"block": None}
 
     latest = repositories.get_latest_block(db)
-    transactions = _order_transactions([json.loads(row.transaction_json) for row in pending])
+    transactions = _order_transactions(
+        [json.loads(row.transaction_json) for row in pending]
+    )[:MAX_BLOCK_TRANSACTIONS]
     block: dict[str, Any] = {
         "height": (latest.n_block + 1) if latest else 1,
         "round": round_number,
@@ -228,6 +231,11 @@ def build_proposal(db: Session, round_number: int) -> dict[str, Any]:
     }
     block["block_hash"] = _compute_block_hash(block)
     return {"block": block}
+
+
+def chain_state(db: Session) -> dict[str, int]:
+    latest = repositories.get_latest_block(db)
+    return {"next_height": latest.n_block + 1 if latest else 1}
 
 
 def _configured_validator_keys() -> dict[str, str]:
@@ -562,35 +570,6 @@ def prepare_proposal(db: Session, round_number: int) -> dict[str, Any]:
     if not block:
         # Nessuna transazione in mempool: il motore Elixir registra un warning.
         return {"flag": "prepare_block", "block_data": None}
-    if (
-        simbehaviour_service.is_byzantine()
-        and _byzantine_scenario() == "invalid_signature"
-    ):
-        # Tamper the proposal while keeping the original (valid) signature:
-        # honest nodes recompute the hash and reject the block.
-        tampered = dict(block)
-        transactions = list(tampered.get("transactions") or [])
-        if transactions and isinstance(transactions[0], dict):
-            first = dict(transactions[0])
-            quantity = first.get("quantity")
-            if isinstance(quantity, int) and not isinstance(quantity, bool):
-                first["quantity"] = quantity + 1
-            else:
-                first["quantity"] = 999999
-            transactions[0] = first
-            tampered["transactions"] = transactions
-        else:
-            tampered["transactions"] = [
-                _spoof_transaction({}, settings.node_id),
-            ]
-        content = _proposal_signature_payload(
-            block["height"], block["round"], settings.node_id, block["block_hash"]
-        )
-        return {
-            "flag": "prepare_block",
-            "block_data": tampered,
-            "proposer_sign": sign_payload(content),
-        }
 
     content = _proposal_signature_payload(
         block["height"], block["round"], settings.node_id, block["block_hash"]

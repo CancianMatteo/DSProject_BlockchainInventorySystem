@@ -1,8 +1,12 @@
 from contextlib import asynccontextmanager
+import asyncio
 import json
+import logging
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+import httpx
+from sqlalchemy.exc import SQLAlchemyError
 from app.api.routes_auth import router as auth_router
 from app.api.routes_chain import router as chain_router
 from app.api.routes_health import router as health_router
@@ -11,13 +15,16 @@ from app.api.routes_python import router as python_router
 from app.api.routes_simbehaviour import router as simbehaviour_router
 from app.api.routes_users import router as users_router
 from app.core.config import settings
-from app.core.exceptions import install_exception_handlers
+from app.core.exceptions import AppError, install_exception_handlers
 from app.core.logging import configure_logging
 from app.db import repositories
 from app.db.session import Base, SessionLocal, engine
 from app.services.cache_service import inventory_cache
 from app.services import simbehaviour_service
 from app.services import user_service
+from app.services import proposal_trigger_service
+
+logger = logging.getLogger(__name__)
 
 
 # Paths (relative to the API prefix) that stay reachable while a fault is
@@ -45,6 +52,24 @@ def _relative_path(path: str) -> str:
     return path
 
 
+def _poll_proposal_trigger() -> None:
+    if simbehaviour_service.get_mode() == simbehaviour_service.NORESPONSE:
+        return
+    with SessionLocal() as db:
+        result = proposal_trigger_service.request_proposal_if_ready(db)
+        if result is not None and result["accepted"]:
+            logger.info("Elixir ha accettato la richiesta di proposta: %s", result)
+
+
+async def _proposal_trigger_loop() -> None:
+    while True:
+        await asyncio.sleep(1)
+        try:
+            await asyncio.to_thread(_poll_proposal_trigger)
+        except (SQLAlchemyError, ValueError, httpx.HTTPError, AppError) as exc:
+            logger.warning("Controllo trigger proposta non riuscito: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     configure_logging()
@@ -67,7 +92,16 @@ async def lifespan(_: FastAPI):
     finally:
         db.close()
 
-    yield
+    proposal_trigger_service.mark_started()
+    trigger_task = asyncio.create_task(_proposal_trigger_loop())
+    try:
+        yield
+    finally:
+        trigger_task.cancel()
+        try:
+            await trigger_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="Blockchain Inventory System Backend", lifespan=lifespan)

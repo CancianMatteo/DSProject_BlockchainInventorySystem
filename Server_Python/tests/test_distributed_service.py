@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from app.services.distributed_service import (
     DistributedReject,
     build_proposal,
     canonical_json,
+    chain_state,
     chain_from,
     commit_block,
     create_pre_prepare_conflict_proof,
@@ -148,6 +150,7 @@ def test_submit_is_idempotent_and_requires_valid_client_signature(db):
 
 
 def test_block_is_finalized_only_with_three_distinct_valid_votes(db, validator_keys):
+    assert chain_state(db) == {"next_height": 1}
     transaction = make_transaction()
     submit_transaction(db, transaction)
     proposal = build_proposal(db, 0)["block"]
@@ -160,6 +163,7 @@ def test_block_is_finalized_only_with_three_distinct_valid_votes(db, validator_k
     result = commit_block(db, proposal, make_votes(proposal, validator_keys))
 
     assert result["height"] == 1
+    assert chain_state(db) == {"next_height": 2}
     assert transaction_status(db, transaction["tx_id"])["status"] == "finalized"
     assert inventory_cache.items["item-1"]["quantity"] == 5
 
@@ -450,6 +454,23 @@ def test_byzantine_keeps_transactions_and_forges_consensus_signatures(
         content = {"hello": "world"}
         forged_signature = distributed_service.sign_payload(content)
         assert distributed_service.verify_validator_signature("node_a", content, forged_signature) is False
+
+        proposal = prepare_proposal(db, 3)
+        block = proposal["block_data"]
+        hash_payload = {
+            "height": block["height"],
+            "prev_block_hash": block["prev_block_hash"],
+            "transactions": block["transactions"],
+        }
+        assert hashlib.sha256(canonical_json(hash_payload)).hexdigest() == block["block_hash"]
+        assert not verify_pre_prepare({
+            "height": block["height"],
+            "round": block["round"],
+            "proposer_id": "node_a",
+            "block_data": block,
+            "signature": proposal["proposer_sign"],
+        })
+        assert db.get(PendingTransaction, transaction["tx_id"]).status == "pending"
     finally:
         simbehaviour_service.set_mode(simbehaviour_service.HEALTHY)
 
@@ -523,3 +544,21 @@ def test_equivocation_scenario_requires_two_pending_transactions(
             prepare_proposal(db, 3)
     finally:
         simbehaviour_service.set_mode(simbehaviour_service.HEALTHY)
+
+
+def test_proposal_contains_at_most_500_transactions(db):
+    db.add_all(
+        PendingTransaction(
+            tx_id=f"tx-{index:04}",
+            transaction_json=json.dumps(
+                {"tx_id": f"tx-{index:04}", "tx_type": "inbound"}
+            ),
+            status="pending",
+        )
+        for index in range(501)
+    )
+    db.commit()
+
+    block = build_proposal(db, 0)["block"]
+
+    assert len(block["transactions"]) == 500
