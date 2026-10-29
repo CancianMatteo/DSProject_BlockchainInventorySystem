@@ -302,12 +302,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
           final transaction = await TransactionSigner.sign({
             'flag': 'transaction',
             'client_ID': authProvider.user?.email ?? '',
-            'tx_type': change > 0 ? 'inbound' : 'outbound',
             'item_id': item.id,
-            'quantity': change.abs(),
+            'quantity': change,
             'location': 'warehouse-1',
             'timestamp': DateTime.now().toUtc().toIso8601String(),
-            'tx_id': transactionId,
+            'trans_id': transactionId,
             'item_catalog': {
               item.id: {
                 'itemName': item.name,

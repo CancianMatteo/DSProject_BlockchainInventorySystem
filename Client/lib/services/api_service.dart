@@ -387,7 +387,7 @@ class ApiService {
         headers: _headers,
         body: jsonEncode({
           'session_token': sessionToken,
-          'tx_id': transactionId,
+          'trans_id': transactionId,
         }),
       );
 

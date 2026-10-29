@@ -17,11 +17,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.db import repositories
-from app.db.models import ChainBlock, PendingTransaction
+from app.db.models import ChainBlock, PendingTransaction, TransactionForwarding
 from app.services import simbehaviour_service
 from app.services.cache_service import inventory_cache
 
@@ -100,14 +101,59 @@ def forward_transaction_to_elixir(transaction: dict[str, Any]) -> bool:
         return False
 
 
+def queue_transaction_forwarding(db: Session, transaction: dict[str, Any]) -> str:
+    """Persist forwarding state and make one immediate delivery attempt."""
+    trans_id = _transaction_id(transaction)
+    row = repositories.get_forwarding(db, trans_id)
+    if row is None:
+        row = TransactionForwarding(
+            trans_id=trans_id,
+            transaction_json=canonical_json(_normalize_client_transaction(transaction)).decode(),
+            status="pending",
+            attempts=0,
+            updated_at=repositories.now_iso(),
+        )
+        db.add(row)
+        db.flush()
+    if row.status == "forwarded":
+        return row.status
+    row.attempts += 1
+    if forward_transaction_to_elixir(transaction):
+        row.status = "forwarded"
+        row.last_error = None
+    else:
+        row.status = "failed"
+        row.last_error = "Elixir forwarding attempt failed"
+    row.updated_at = repositories.now_iso()
+    db.commit()
+    return row.status
+
+
+def retry_queued_transaction_forwarding(db: Session) -> int:
+    delivered = 0
+    for row in repositories.get_forwarding_jobs(db):
+        transaction = json.loads(row.transaction_json)
+        row.attempts += 1
+        if forward_transaction_to_elixir(transaction):
+            row.status = "forwarded"
+            row.last_error = None
+            delivered += 1
+        else:
+            row.status = "failed"
+            row.last_error = "Elixir forwarding retry failed"
+        row.updated_at = repositories.now_iso()
+    db.commit()
+    return delivered
+
+
 def canonical_json(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def _transaction_id(transaction: dict[str, Any]) -> str:
-    value = transaction.get("tx_id", transaction.get("TransID"))
+    value = transaction.get("trans_id")
     if not isinstance(value, str) or not value.strip():
-        raise DistributedReject("Transaction is missing a valid TransID")
+        raise DistributedReject("Transaction is missing a valid trans_id")
     return value
 
 
@@ -132,8 +178,10 @@ def _verify_transaction_signature(transaction: dict[str, Any]) -> None:
     unsigned_transaction = {
         key: value
         for key, value in transaction.items()
-        if key != signature_field
+        if key not in {signature_field, "signature", "flag", "from_node", "pub_key"}
     }
+    unsigned_transaction["client_public_key"] = public_key_text
+    unsigned_transaction["client_ID"] = transaction.get("client_ID", transaction.get("from_node"))
     try:
         public_key = Ed25519PublicKey.from_public_bytes(
             base64.b64decode(public_key_text, validate=True)
@@ -147,21 +195,18 @@ def _verify_transaction_signature(transaction: dict[str, Any]) -> None:
 def _validate_transaction(transaction: Any) -> dict[str, Any]:
     if not isinstance(transaction, dict):
         raise DistributedReject("Each transaction must be an object")
-    if transaction.get("flag") != "transaction":
+    if transaction.get("flag") not in (None, "transaction"):
         raise DistributedReject("Transaction flag must be 'transaction'")
     normalized = _normalize_client_transaction(transaction)
     _transaction_id(normalized)
     _verify_transaction_signature(transaction)
 
-    tx_type = normalized.get("tx_type")
     item_id = normalized.get("item_id")
     quantity = normalized.get("quantity")
-    if tx_type not in {"inbound", "outbound"}:
-        raise DistributedReject("Transaction type must be inbound or outbound")
     if not isinstance(item_id, str) or not item_id.strip():
         raise DistributedReject("Transaction item_id must not be empty")
-    if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
-        raise DistributedReject("Transaction quantity must be a positive integer")
+    if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity == 0:
+        raise DistributedReject("Transaction quantity must be a non-zero integer")
     for field in ("from_node", "location", "timestamp"):
         if not isinstance(normalized.get(field), str) or not normalized[field].strip():
             raise DistributedReject(f"Transaction {field} must not be empty")
@@ -185,7 +230,7 @@ def _transactions_in_chain(db: Session) -> set[str]:
         transactions = payload if isinstance(payload, list) else payload.get("transactions", [])
         for transaction in transactions:
             if isinstance(transaction, dict):
-                value = transaction.get("tx_id", transaction.get("TransID"))
+                value = transaction.get("trans_id")
                 if isinstance(value, str):
                     ids.add(value)
     return ids
@@ -196,7 +241,7 @@ def _all_transaction_deltas(transactions: list[dict[str, Any]]) -> dict[str, int
     for transaction in transactions:
         item_id = transaction["item_id"]
         quantity = transaction["quantity"]
-        delta = quantity if transaction["tx_type"] == "inbound" else -quantity
+        delta = quantity
         changes[item_id] = changes.get(item_id, 0) + delta
     return changes
 
@@ -224,9 +269,9 @@ def _validate_inventory_transition(
     for transaction in transactions:
         item_id = transaction["item_id"]
         quantity = transaction["quantity"]
-        if item_id not in known_items and transaction["tx_type"] != "inbound":
+        if item_id not in known_items and quantity < 0:
             raise DistributedReject(f"Unknown item {item_id} can only be added by inbound transactions", 422)
-        if transaction["tx_type"] == "inbound":
+        if quantity > 0:
             if item_id not in known_items:
                 metadata = transaction.get("item_catalog", {}).get(item_id)
                 if not metadata:
@@ -239,12 +284,12 @@ def _validate_inventory_transition(
             balances[item_id] = balances.get(item_id, 0) + quantity
         else:
             available = balances.get(item_id, 0)
-            if available < quantity:
+            if available < -quantity:
                 raise DistributedReject(
                     f"Transaction would make {item_id} inventory negative",
                     422,
                 )
-            balances[item_id] = available - quantity
+            balances[item_id] = available + quantity
 
     for item_id, delta in changes.items():
         if item_id not in inventory_cache.items and delta <= 0:
@@ -260,7 +305,7 @@ def _order_transactions(transactions: list[dict[str, Any]]) -> list[dict[str, An
     return sorted(
         transactions,
         key=lambda transaction: (
-            transaction["tx_type"] != "inbound",
+            transaction["quantity"] < 0,
             _transaction_id(transaction),
         ),
     )
@@ -268,25 +313,25 @@ def _order_transactions(transactions: list[dict[str, Any]]) -> list[dict[str, An
 
 def submit_transaction(db: Session, transaction: dict[str, Any]) -> dict[str, Any]:
     normalized = _validate_transaction(transaction)
-    tx_id = _transaction_id(normalized)
-    if tx_id in _transactions_in_chain(db):
-        raise DistributedReject(f"Transaction {tx_id} already exists in the blockchain")
+    trans_id = _transaction_id(normalized)
+    if trans_id in _transactions_in_chain(db):
+        raise DistributedReject(f"Transaction {trans_id} already exists in the blockchain")
 
     serialized = canonical_json(normalized).decode("utf-8")
-    existing = repositories.get_pending_transaction(db, tx_id)
+    existing = repositories.get_pending_transaction(db, trans_id)
     if existing is not None:
         if existing.transaction_json != serialized:
-            raise DistributedReject(f"Transaction ID {tx_id} is already used")
-        return {"tx_id": tx_id, "status": existing.status, "duplicate": True}
+            raise DistributedReject(f"Transaction ID {trans_id} is already used")
+        return {"trans_id": trans_id, "status": existing.status, "duplicate": True}
 
     pending = _order_transactions(
         [json.loads(row.transaction_json) for row in repositories.get_pending_transactions(db)]
     )
     pending.append(normalized)
     _validate_inventory_transition(_order_transactions(pending))
-    db.add(PendingTransaction(tx_id=tx_id, transaction_json=serialized, status="pending"))
+    db.add(PendingTransaction(trans_id=trans_id, transaction_json=serialized, status="pending"))
     db.commit()
-    return {"tx_id": tx_id, "status": "pending", "duplicate": False}
+    return {"trans_id": trans_id, "status": "pending", "duplicate": False}
 
 
 def _proposal_hash_payload(block: dict[str, Any]) -> dict[str, Any]:
@@ -420,10 +465,10 @@ def _validate_proposal(
         raise DistributedReject("Proposed block prev_block_hash does not match the chain head", 409)
 
     validated_transactions = [_validate_transaction(tx) for tx in transactions]
-    tx_ids = [_transaction_id(tx) for tx in validated_transactions]
-    if len(tx_ids) != len(set(tx_ids)):
+    trans_ids = [_transaction_id(tx) for tx in validated_transactions]
+    if len(trans_ids) != len(set(trans_ids)):
         raise DistributedReject("Proposed block contains duplicate transaction IDs")
-    if set(tx_ids) & _transactions_in_chain(db):
+    if set(trans_ids) & _transactions_in_chain(db):
         raise DistributedReject("Proposed block contains a transaction ID already in the blockchain")
 
     computed_hash = _compute_block_hash(block)
@@ -471,8 +516,8 @@ def _store_block(
             signature=vote["signature"],
         )
 
-    for tx_id in transaction_ids:
-        pending = repositories.get_pending_transaction(db, tx_id)
+    for trans_id in transaction_ids:
+        pending = repositories.get_pending_transaction(db, trans_id)
         if pending is not None:
             pending.status = "finalized"
     db.commit()
@@ -528,13 +573,27 @@ def chain_from(db: Session, from_height: int) -> dict[str, Any]:
     return {"blocks": blocks}
 
 
-def transaction_status(db: Session, tx_id: str) -> dict[str, Any]:
-    pending = repositories.get_pending_transaction(db, tx_id)
+def transaction_status(db: Session, trans_id: str) -> dict[str, Any]:
+    pending = repositories.get_pending_transaction(db, trans_id)
     if pending is not None:
-        return {"tx_id": tx_id, "status": pending.status}
-    if tx_id in _transactions_in_chain(db):
-        return {"tx_id": tx_id, "status": "finalized"}
-    return {"tx_id": tx_id, "status": "unknown"}
+        return {"trans_id": trans_id, "status": pending.status}
+    if trans_id in _transactions_in_chain(db):
+        return {"trans_id": trans_id, "status": "finalized"}
+    return {"trans_id": trans_id, "status": "unknown"}
+
+
+def forwarding_status(db: Session, trans_id: str) -> str:
+    row = repositories.get_forwarding(db, trans_id)
+    return row.status if row is not None else "not_queued"
+
+
+def forwarding_monitor(db: Session) -> dict[str, int]:
+    summary = {"pending": 0, "failed": 0, "forwarded": 0}
+    for row in db.scalars(select(TransactionForwarding)):
+        if row.status in summary:
+            summary[row.status] += 1
+    summary["queue_depth"] = summary["pending"] + summary["failed"]
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -575,12 +634,11 @@ def _spoof_transaction(base: dict[str, Any], node_id: str) -> dict[str, Any]:
         **base,
         "flag": "transaction",
         "from_node": base.get("from_node") or node_id,
-        "tx_type": base.get("tx_type") or "inbound",
         "item_id": base.get("item_id") or "spoofed-item",
         "quantity": base.get("quantity") or 1,
         "location": base.get("location") or "spoofed-warehouse",
         "timestamp": base.get("timestamp") or datetime.now(UTC).isoformat(),
-        "tx_id": base.get("tx_id") or f"spoofed-{uuid4().hex}",
+        "trans_id": base.get("trans_id") or f"spoofed-{uuid4().hex}",
         "pub_key": base.get("pub_key") or "",
         "item_catalog": base.get("item_catalog") or {},
     }

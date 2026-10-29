@@ -5,7 +5,7 @@
 This backend is the controller and authoritative model layer for the BIS Flutter client.
 
 Design goals:
-- REST API over HTTPS (TLS terminated at NGINX).
+- REST API over HTTP for the demo deployment.
 - Stateless request handling with signed session tokens.
 - Deterministic blockchain validation and append-only chain persistence.
 - Fast inventory reads through in-memory cache (rebuildable from chain).
@@ -49,8 +49,7 @@ Data authority:
 Base path: `/api/v1`
 
 Transport notes:
-- HTTPS is enabled via NGINX on `bis.samuel-daros.it` (prod) and `bis-dev.samuel-daros.it` (dev).
-- HTTP is not disabled; it redirects to HTTPS.
+- HTTP is used directly by the demo deployment; HTTPS is a future hardening step.
 - Each node's Python backend listens on container port `8000` and serves
   BOTH external clients (`/api/v1/auth|users|chain|...`) AND the co-located
   Elixir engine (`POST /api/v1/python_call`) on that single socket: FastAPI
@@ -59,7 +58,6 @@ Transport notes:
 - The Elixir side never binds 8000: it listens on 4000 (cluster gossip) and
   on the internal-only 6001 (simbehaviour forwarding from Python). The deploy
   publishes 4000 as host ports 4001..4004 (now internal-only, no host exposure).
-- TLS in dev may use self-signed certs for testing; clients must explicitly allow them in debug.
 
 ### 3.1 POST /auth/login
 
@@ -371,12 +369,12 @@ Request:
 	"transaction": {
 		"flag": "transaction",
 		"client_ID": "user@example.com",
-		"tx_type": "inbound",
+		"quantity": 2,
 		"item_id": "item_1",
 		"quantity": 3,
 		"location": "warehouse-1",
 		"timestamp": "2026-10-25T11:00:00Z",
-		"tx_id": "uuid",
+		"trans_id": "uuid",
 		"client_public_key": "base64-ed25519-public-key",
 		"signature": "base64-ed25519-signature",
 		"item_catalog": {
@@ -402,7 +400,7 @@ Response 202:
 ```json
 {
 	"ok": true,
-	"tx_id": "uuid",
+	"trans_id": "uuid",
 	"status": "pending",
 	"duplicate": false,
 	"confirm_pending_trans": true
@@ -424,7 +422,7 @@ Request:
 ```json
 {
 	"session_token": "...",
-	"tx_id": "uuid"
+	"trans_id": "uuid"
 }
 ```
 
@@ -432,7 +430,7 @@ Response 200:
 ```json
 {
 	"ok": true,
-	"tx_id": "uuid",
+	"trans_id": "uuid",
 	"status": "finalized",
 	"confirm_block_creation_for_trans": true
 }
@@ -556,7 +554,7 @@ Recommended settings:
 - Token TTL: 8-12 hours
 - Secret from env var (`JWT_SECRET`)
 - Password policy: min length, complexity, breached-password check if possible
-- All endpoints behind HTTPS (reverse proxy in production)
+- All endpoints are currently served over HTTP in the demo.
 
 Block signatures:
 - Use Ed25519 private key stored in container secret.
@@ -623,8 +621,6 @@ Health endpoints:
 Production notes:
 - Use non-root user in container.
 - Mount `/data` volume for SQLite persistence.
-- Put behind NGINX reverse proxy for TLS termination.
-- Enforce HTTP to HTTPS redirect at NGINX.
 
 ---
 
@@ -687,7 +683,7 @@ API conventions for client consistency:
 ## 11. Open Decisions
 
 1. Password transport mode:
-	 - Recommended: plaintext over HTTPS + server-side hashing.
+	 - Recommended for production: TLS plus server-side hashing.
 	 - Alternative: client-hash + server-side secondary hash.
 2. User removal policy:
 	 - Recommended: soft disable (audit-safe).

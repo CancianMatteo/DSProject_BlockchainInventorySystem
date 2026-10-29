@@ -43,9 +43,20 @@ class ChainBlock(Base):
 class PendingTransaction(Base):
     __tablename__ = "pending_transactions"
 
-    tx_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    trans_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     transaction_json: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", index=True)
+
+
+class TransactionForwarding(Base):
+    __tablename__ = "transaction_forwarding"
+
+    trans_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    transaction_json: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
 
 
 class BlockVote(Base):

@@ -67,11 +67,12 @@ def add_transaction(
         )
 
     result = distributed_service.submit_transaction(db, transaction)
-    distributed_service.forward_transaction_to_elixir(transaction)
+    forwarding = distributed_service.queue_transaction_forwarding(db, transaction)
     distributed_service.trigger_block_if_ready(db)
     return {
         "ok": True,
         **result,
+        "forwarding_status": forwarding,
         "confirm_pending_trans": result["status"] == "pending",
     }
 
@@ -88,9 +89,15 @@ def get_transaction_status(
             status_code=401,
         )
 
-    result = distributed_service.transaction_status(db, payload.tx_id)
+    result = distributed_service.transaction_status(db, payload.trans_id)
     return {
         "ok": True,
         **result,
+        "forwarding_status": distributed_service.forwarding_status(db, payload.trans_id),
         "confirm_block_creation_for_trans": result["status"] == "finalized",
     }
+
+
+@router.get("/forwarding_monitor")
+def get_forwarding_monitor(db: Session = Depends(get_db)):
+    return {"ok": True, **distributed_service.forwarding_monitor(db)}

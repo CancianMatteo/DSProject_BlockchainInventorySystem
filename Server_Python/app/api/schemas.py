@@ -65,7 +65,7 @@ class AddTransactionRequest(BaseModel):
 
 class TransactionStatusRequest(BaseModel):
     session_token: str
-    tx_id: str = Field(min_length=1, max_length=128)
+    trans_id: str = Field(min_length=1, max_length=128)
 
 
 class BuildProposalRequest(BaseModel):

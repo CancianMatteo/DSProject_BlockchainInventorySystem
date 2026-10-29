@@ -4,6 +4,7 @@ import json
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import inspect, text
 from app.api.routes_auth import router as auth_router
 from app.api.routes_chain import router as chain_router
 from app.api.routes_health import router as health_router
@@ -49,6 +50,7 @@ def _relative_path(path: str) -> str:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     configure_logging()
+    _migrate_transaction_identifier()
     Base.metadata.create_all(bind=engine)
 
     db = SessionLocal()
@@ -76,12 +78,25 @@ async def lifespan(_: FastAPI):
         await asyncio.gather(trigger_task, return_exceptions=True)
 
 
+def _migrate_transaction_identifier() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("pending_transactions"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("pending_transactions")}
+    if "tx_id" in columns and "trans_id" not in columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text("ALTER TABLE pending_transactions RENAME COLUMN tx_id TO trans_id")
+            )
+
+
 async def _block_trigger_loop() -> None:
     while True:
         await asyncio.sleep(settings.block_trigger_interval_seconds)
         db = SessionLocal()
         try:
-            distributed_service.trigger_block_if_ready(db, force=True)
+            distributed_service.retry_queued_transaction_forwarding(db)
+            distributed_service.trigger_block_if_ready(db)
         finally:
             db.close()
 

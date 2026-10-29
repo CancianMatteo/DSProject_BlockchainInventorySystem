@@ -81,7 +81,6 @@ def validator_keys(monkeypatch):
 def make_transaction(
     item_id: str = "item-1",
     quantity: int = 5,
-    tx_type: str = "inbound",
 ) -> dict:
     private_key = Ed25519PrivateKey.generate()
     public_key = private_key.public_key().public_bytes(
@@ -89,22 +88,20 @@ def make_transaction(
         serialization.PublicFormat.Raw,
     )
     transaction = {
-        "flag": "transaction",
-        "from_node": "operator@example.test",
-        "tx_type": tx_type,
+        "client_ID": "operator@example.test",
         "item_id": item_id,
         "quantity": quantity,
         "location": "warehouse-1",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "tx_id": str(uuid.uuid4()),
-        "pub_key": base64.b64encode(public_key).decode("ascii"),
+        "trans_id": str(uuid.uuid4()),
+        "client_public_key": base64.b64encode(public_key).decode("ascii"),
         "item_catalog": {
             item_id: {
                 "itemName": "Sample",
                 "brand": "Brand",
                 "category": "General",
             }
-        } if tx_type == "inbound" else {},
+        } if quantity > 0 else {},
     }
     transaction["signature"] = base64.b64encode(
         private_key.sign(canonical_json(transaction))
@@ -139,7 +136,7 @@ def test_submit_is_idempotent_and_requires_valid_client_signature(db):
 
     assert accepted["status"] == "pending"
     assert duplicate["duplicate"] is True
-    assert db.get(PendingTransaction, transaction["tx_id"]).status == "pending"
+    assert db.get(PendingTransaction, transaction["trans_id"]).status == "pending"
 
     tampered = make_transaction()
     tampered["quantity"] += 1
@@ -160,7 +157,7 @@ def test_block_is_finalized_only_with_three_distinct_valid_votes(db, validator_k
     result = commit_block(db, proposal, make_votes(proposal, validator_keys))
 
     assert result["height"] == 1
-    assert transaction_status(db, transaction["tx_id"])["status"] == "finalized"
+    assert transaction_status(db, transaction["trans_id"])["status"] == "finalized"
     assert inventory_cache.items["item-1"]["quantity"] == 5
 
 
@@ -280,7 +277,7 @@ def test_rejects_outbound_transaction_exceeding_committed_stock(db, validator_ke
     proposal = build_proposal(db, 0)["block"]
     commit_block(db, proposal, make_votes(proposal, validator_keys))
 
-    outbound = make_transaction(quantity=6, tx_type="outbound")
+    outbound = make_transaction(quantity=-6)
     with pytest.raises(DistributedReject, match="would make item-1 inventory negative"):
         submit_transaction(db, outbound)
 
@@ -312,7 +309,7 @@ def test_sync_import_accepts_only_a_certified_block(db, validator_keys, monkeypa
         with Session(target_engine, autoflush=False, future=True) as target_db:
             imported = import_block(target_db, synced["block"], synced["votes"])
             assert imported["height"] == 1
-            assert transaction_status(target_db, transaction["tx_id"])["status"] == "finalized"
+            assert transaction_status(target_db, transaction["trans_id"])["status"] == "finalized"
             assert inventory_cache.items["item-1"]["quantity"] == 5
     finally:
         Base.metadata.drop_all(target_engine)
@@ -432,7 +429,7 @@ def test_byzantine_keeps_transactions_and_forges_consensus_signatures(
         transaction = make_transaction()
         result = distributed_service.submit_transaction(db, transaction)
         assert result["duplicate"] is False
-        assert db.get(PendingTransaction, transaction["tx_id"]).status == "pending"
+        assert db.get(PendingTransaction, transaction["trans_id"]).status == "pending"
 
         # Signatures/keys are forged: honest verification must fail.
         content = {"hello": "world"}

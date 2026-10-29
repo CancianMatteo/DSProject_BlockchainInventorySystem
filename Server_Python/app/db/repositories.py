@@ -13,6 +13,7 @@ from app.db.models import (
     PasswordResetAttemptCounter,
     PasswordResetOtp,
     PendingTransaction,
+    TransactionForwarding,
     RevokedToken,
     User,
 )
@@ -159,15 +160,26 @@ def insert_block(
     return row
 
 
-def get_pending_transaction(db: Session, tx_id: str) -> PendingTransaction | None:
-    return db.get(PendingTransaction, tx_id)
+def get_pending_transaction(db: Session, trans_id: str) -> PendingTransaction | None:
+    return db.get(PendingTransaction, trans_id)
 
 
 def get_pending_transactions(db: Session) -> list[PendingTransaction]:
     stmt = (
         select(PendingTransaction)
         .where(PendingTransaction.status == "pending")
-        .order_by(PendingTransaction.tx_id.asc())
+        .order_by(PendingTransaction.trans_id.asc())
+    )
+    return list(db.scalars(stmt))
+
+
+def get_forwarding(db: Session, trans_id: str) -> TransactionForwarding | None:
+    return db.get(TransactionForwarding, trans_id)
+
+
+def get_forwarding_jobs(db: Session) -> list[TransactionForwarding]:
+    stmt = select(TransactionForwarding).where(
+        TransactionForwarding.status.in_(("pending", "failed"))
     )
     return list(db.scalars(stmt))
 

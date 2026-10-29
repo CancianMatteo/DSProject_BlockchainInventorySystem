@@ -29,7 +29,8 @@ crittografiche.
    `BLOCK_TRANSACTION_THRESHOLD`, Python invia a Elixir
    `{"flag":"trigger_block"}`. Elixir chiede al proposer del round corrente di
    preparare il blocco; il proposer ottiene da Python `block_data` con numero,
-   round, transazioni, hash e `proposer_sign`.
+   round, transazioni, hash e `proposer_sign`. Il trigger è idempotente: un
+   proposer con una proposta già attiva non ne crea una seconda.
 5. **Consenso.** Il proposer diffonde `pre_prepare`; i nodi verificano la
    proposta e votano `prepare`. Dopo il quorum PREPARE viene diffuso
    `commit_proposal`; dopo il quorum COMMIT ogni Python riceve `write_block` e
@@ -63,6 +64,29 @@ Il `validator_id` usato dal nodo deve coincidere con l'identità associata alla 
 Python serializza i contenuti firmati in JSON canonico (chiavi ordinate e separatori deterministici) e usa firme Ed25519 codificate in Base64. Il `block_hash` è SHA-256 del contenuto canonico del blocco.
 Le firme della proposta e dei voti sono distinte: la prima prova chi ha proposto il blocco, le seconde costituiscono il certificato di quorum.
 
+### Contratto della transazione
+
+`quantity` è un intero diverso da zero: positivo significa ingresso e negativo
+significa uscita. Il contratto usa `trans_id` come identificativo.
+I campi firmati dal client sono `item_id`, `quantity`, `location`, `client_ID`,
+`client_public_key`, `trans_id`, `timestamp` e `item_catalog`; Python inoltra
+gli stessi dati a Elixir aggiungendo `flag: "transaction"` e rinominando la
+firma in `client_signature`. Il primo Python autentica il client; i peer
+verificano la firma usando la chiave pubblica inclusa nella transazione.
+
+La consegna Python-Elixir è persistita in una coda per `trans_id`. Il client
+riceve `forwarding_status` (`forwarded`, `failed` o `not_queued`) e un worker
+ritenta le consegne fallite; duplicati sono innocui perché il mempool usa
+`trans_id` come chiave idempotente.
+
+## Miglioramenti futuri
+
+- validazione della firma su un timestamp con finestra temporale;
+- rifiuto delle transazioni oltre una età massima;
+- nonce opzionale e cache anti-replay;
+- metriche e endpoint operativo (`GET /api/v1/chain/forwarding_monitor`) per profondità della coda, tentativi e errori
+  di forwarding.
+
 ## Sequenza PoA-BFT modificata
 
 I validatori sono ordinati per ID in modo lessicografico, sia in Elixir sia in Python. Per un'altezza `height` e un round `round`, il proposer atteso è `validators[(height + round) mod numero_validatori]`.
@@ -71,7 +95,8 @@ Con `N = 3f + 1`, il quorum è `2f + 1`.
 ### 1. Avvio del round e PRE-PREPARE
 
 1. Elixir avvia il timer del round e calcola il proposer.
-2. Se è il proposer, chiede a Python di preparare un blocco.
+2. Il proposer resta in attesa di `trigger_block`; non crea blocchi vuoti
+   all'avvio del round.
 3. Python costruisce il blocco dalla mempool, lo firma come proposer e restituisce blocco e firma.
 4. Prima di inviare la proposta, il proposer chiede a Python anche la propria firma PREPARE. Poi invia il messaggio `pre_prepare` a tutti i peer e conserva la firma PREPARE locale.
 5. Ogni nodo chiede a Python di verificare hash, firma del proposer e scelta deterministica del proposer. Se la proposta è valida, firma PREPARE e invia il voto **unicast** al proposer.
@@ -248,7 +273,7 @@ La risposta `proof` contiene `flag: "pre_prepare_conflict_proof"`, altezza, roun
 
 Una transazione inviata dal client a Python contiene i campi applicativi
 `item_id`, `quantity`, `location`, `client_ID`, `signature` e
-`client_public_key`, oltre ai campi necessari al dominio (`tx_id`, `tx_type`,
+`client_public_key`, oltre ai campi necessari al dominio (`trans_id`,
 `timestamp` e, per nuovi articoli, `item_catalog`).
 
 Una transazione inoltrata da Python a Elixir conserva i campi firmati dal
@@ -259,7 +284,7 @@ Il payload HTTP verso Elixir è:
 {
   "flag": "transaction",
   "client_ID": "client@example.com",
-  "tx_id": "uuid",
+  "trans_id": "uuid",
   "item_id": "item-1",
   "quantity": 2,
   "location": "warehouse-1",

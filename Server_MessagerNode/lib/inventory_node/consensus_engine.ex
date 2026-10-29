@@ -128,7 +128,14 @@ defmodule InventoryNode.ConsensusEngine do
         handle_info_bad_pre_prepare(proposer_id, state)
 
       {:verified_prepare_vote, height, round, block_hash, validator_id, signature, true} ->
-        handle_info_verified_prepare_vote(height, round, block_hash, validator_id, signature, state)
+        handle_info_verified_prepare_vote(
+          height,
+          round,
+          block_hash,
+          validator_id,
+          signature,
+          state
+        )
 
       {:verified_prepare_vote, _, _, _, validator_id, _, false} ->
         handle_info_bad_prepare_vote(validator_id, state)
@@ -195,16 +202,8 @@ defmodule InventoryNode.ConsensusEngine do
         temporary_signature: nil
     }
 
-    if current_proposer == state.node_id do
-      Logger.info(
-        "[Altezza #{state.current_height}] Sono il Proposer (Round #{state.current_round})"
-      )
-
-      propose_block(new_state)
-    else
-      Logger.info("[Altezza #{state.current_height}] Proposer atteso: #{current_proposer}")
-      new_state
-    end
+    Logger.info("[Altezza #{state.current_height}] Proposer atteso: #{current_proposer}")
+    new_state
   end
 
   defp handle_info_round_timeout(state) do
@@ -406,13 +405,13 @@ defmodule InventoryNode.ConsensusEngine do
   end
 
   defp handle_info_verified_pre_prepare(
-        height,
-        round,
-        proposer_id,
-        block_data,
-        proposer_signature,
-        state
-      ) do
+         height,
+         round,
+         proposer_id,
+         block_data,
+         proposer_signature,
+         state
+       ) do
     expected_proposer = proposer_for(state, height, round)
 
     cond do
@@ -505,13 +504,13 @@ defmodule InventoryNode.ConsensusEngine do
   end
 
   defp handle_info_verified_prepare_vote(
-        height,
-        round,
-        block_hash,
-        validator_id,
-        signature,
-        state
-      ) do
+         height,
+         round,
+         block_hash,
+         validator_id,
+         signature,
+         state
+       ) do
     if height == state.current_height and round == state.current_round and
          state.pending_block != nil and state.pending_block["block_hash"] == block_hash and
          validator_id in state.validators and not state.commit_started do
@@ -546,14 +545,14 @@ defmodule InventoryNode.ConsensusEngine do
   # FASE 3: COMMIT (votazione separata dopo il certificato PREPARE)
 
   defp handle_cast_commit_proposal(
-        height,
-        round,
-        proposer_id,
-        block_data,
-        proposer_signature,
-        prepare_signatures,
-        state
-      ) do
+         height,
+         round,
+         proposer_id,
+         block_data,
+         proposer_signature,
+         prepare_signatures,
+         state
+       ) do
     engine_pid = self()
 
     expected_proposer = proposer_for(state, height, round)
@@ -598,14 +597,14 @@ defmodule InventoryNode.ConsensusEngine do
   end
 
   defp handle_info_verified_commit_proposal(
-        height,
-        round,
-        proposer_id,
-        block_data,
-        proposer_signature,
-        prepare_signatures,
-        state
-      ) do
+         height,
+         round,
+         proposer_id,
+         block_data,
+         proposer_signature,
+         prepare_signatures,
+         state
+       ) do
     expected_proposer = proposer_for(state, height, round)
 
     cond do
@@ -643,20 +642,20 @@ defmodule InventoryNode.ConsensusEngine do
   end
 
   defp handle_info_bad_commit_proposal(proposer_id, state),
-      do: ignore_bad_sig(proposer_id, state)
+    do: ignore_bad_sig(proposer_id, state)
 
   defp handle_cast_commit_vote(
-        height,
-        round,
-        proposer_id,
-        block_data,
-        proposer_signature,
-        prepare_signatures,
-        block_hash,
-        validator_id,
-        signature,
-        state
-      ) do
+         height,
+         round,
+         proposer_id,
+         block_data,
+         proposer_signature,
+         prepare_signatures,
+         block_hash,
+         validator_id,
+         signature,
+         state
+       ) do
     engine_pid = self()
 
     if height == state.current_height and round == state.current_round and
@@ -709,17 +708,17 @@ defmodule InventoryNode.ConsensusEngine do
   end
 
   defp handle_info_verified_commit_vote(
-        height,
-        round,
-        proposer_id,
-        block_data,
-        proposer_signature,
-        prepare_signatures,
-        block_hash,
-        validator_id,
-        signature,
-        state
-      ) do
+         height,
+         round,
+         proposer_id,
+         block_data,
+         proposer_signature,
+         prepare_signatures,
+         block_hash,
+         validator_id,
+         signature,
+         state
+       ) do
     cond do
       height != state.current_height or round != state.current_round or
         proposer_id != proposer_for(state, height, round) or
@@ -771,7 +770,7 @@ defmodule InventoryNode.ConsensusEngine do
   end
 
   defp handle_info_bad_commit_vote(validator_id, state),
-      do: ignore_bad_sig(validator_id, state)
+    do: ignore_bad_sig(validator_id, state)
 
   defp start_commit_voting(
          state,
