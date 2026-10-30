@@ -11,7 +11,6 @@ from typing import Any
 from uuid import uuid4
 
 from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -25,6 +24,7 @@ from app.db import repositories
 from app.db.models import ChainBlock, PendingTransaction, TransactionForwarding
 from app.services import simbehaviour_service
 from app.services.cache_service import inventory_cache
+from app.services.proposal_trigger_service import MAX_BLOCK_TRANSACTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -352,7 +352,9 @@ def build_proposal(db: Session, round_number: int) -> dict[str, Any]:
         return {"block": None}
 
     latest = repositories.get_latest_block(db)
-    transactions = _order_transactions([json.loads(row.transaction_json) for row in pending])
+    transactions = _order_transactions(
+        [json.loads(row.transaction_json) for row in pending]
+    )[:MAX_BLOCK_TRANSACTIONS]
     block: dict[str, Any] = {
         "height": (latest.n_block + 1) if latest else 1,
         "round": round_number,
@@ -361,6 +363,11 @@ def build_proposal(db: Session, round_number: int) -> dict[str, Any]:
     }
     block["block_hash"] = _compute_block_hash(block)
     return {"block": block}
+
+
+def chain_state(db: Session) -> dict[str, int]:
+    latest = repositories.get_latest_block(db)
+    return {"next_height": latest.n_block + 1 if latest else 1}
 
 
 def _configured_validator_keys() -> dict[str, str]:
@@ -372,7 +379,7 @@ def _configured_validator_keys() -> dict[str, str]:
             raise DistributedReject("Validator public-key configuration is invalid", 500) from exc
     if not isinstance(configured, dict):
         raise DistributedReject("Validator public-key configuration must be an object", 500)
-    return {**peer_public_keys, **configured}
+    return configured
 
 
 def _verify_votes(block: dict[str, Any], votes: Any) -> list[dict[str, Any]]:
@@ -601,8 +608,6 @@ def forwarding_monitor(db: Session) -> dict[str, int]:
 # consenso (dispatched by "flag" dall'endpoint /api/v1/python_call).
 # ---------------------------------------------------------------------------
 
-# Chiavi pubbliche dei peer ricevute via setup_keys_warning (registro volatile).
-peer_public_keys: dict[str, str] = {}
 _BYZANTINE_SCENARIOS = {
     "invalid_signature",
     "split_brain",
@@ -645,41 +650,6 @@ def _spoof_transaction(base: dict[str, Any], node_id: str) -> dict[str, Any]:
     forged.pop("signature", None)
     forged["signature"] = base64.b64encode(os.urandom(64)).decode("ascii")
     return forged
-
-
-def local_public_key() -> str:
-    if (
-        simbehaviour_service.is_byzantine()
-        and _byzantine_scenario() == "invalid_signature"
-    ):
-        # Advertise an unrelated key so honest nodes cannot match this node
-        # to its registered validator identity.
-        decoy = Ed25519PrivateKey.generate()
-        return base64.b64encode(
-            decoy.public_key().public_bytes(
-                serialization.Encoding.Raw,
-                serialization.PublicFormat.Raw,
-            )
-        ).decode("ascii")
-    public_keys = _configured_validator_keys()
-    public_key = public_keys.get(settings.node_id)
-    if not isinstance(public_key, str) or not public_key:
-        raise DistributedReject(
-            f"No validator public key configured for node {settings.node_id}", 500
-        )
-    return public_key
-
-
-def register_peer_public_key(from_node: Any, public_key: Any) -> None:
-    if not isinstance(from_node, str) or not from_node.strip():
-        raise DistributedReject("Peer node id must not be empty")
-    if not isinstance(public_key, str) or not public_key.strip():
-        raise DistributedReject("Peer public key must not be empty")
-    try:
-        base64.b64decode(public_key, validate=True)
-    except (ValueError, binascii.Error) as exc:
-        raise DistributedReject("Peer public key must be base64 encoded") from exc
-    peer_public_keys[from_node] = public_key
 
 
 def _validator_private_key() -> Ed25519PrivateKey:
@@ -745,35 +715,6 @@ def prepare_proposal(db: Session, round_number: int) -> dict[str, Any]:
     if not block:
         # Nessuna transazione in mempool: il motore Elixir registra un warning.
         return {"flag": "prepare_block", "block_data": None}
-    if (
-        simbehaviour_service.is_byzantine()
-        and _byzantine_scenario() == "invalid_signature"
-    ):
-        # Tamper the proposal while keeping the original (valid) signature:
-        # honest nodes recompute the hash and reject the block.
-        tampered = dict(block)
-        transactions = list(tampered.get("transactions") or [])
-        if transactions and isinstance(transactions[0], dict):
-            first = dict(transactions[0])
-            quantity = first.get("quantity")
-            if isinstance(quantity, int) and not isinstance(quantity, bool):
-                first["quantity"] = quantity + 1
-            else:
-                first["quantity"] = 999999
-            transactions[0] = first
-            tampered["transactions"] = transactions
-        else:
-            tampered["transactions"] = [
-                _spoof_transaction({}, settings.node_id),
-            ]
-        content = _proposal_signature_payload(
-            block["height"], block["round"], settings.node_id, block["block_hash"]
-        )
-        return {
-            "flag": "prepare_block",
-            "block_data": tampered,
-            "proposer_sign": sign_payload(content),
-        }
 
     content = _proposal_signature_payload(
         block["height"], block["round"], settings.node_id, block["block_hash"]

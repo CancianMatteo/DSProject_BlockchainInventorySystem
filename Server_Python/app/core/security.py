@@ -12,7 +12,6 @@ from passlib.context import CryptContext
 
 from app.core.config import settings
 from app.core.exceptions import AppError
-
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 

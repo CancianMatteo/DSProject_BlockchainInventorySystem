@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from app.services.distributed_service import (
     DistributedReject,
     build_proposal,
     canonical_json,
+    chain_state,
     chain_from,
     commit_block,
     create_pre_prepare_conflict_proof,
@@ -145,6 +147,7 @@ def test_submit_is_idempotent_and_requires_valid_client_signature(db):
 
 
 def test_block_is_finalized_only_with_three_distinct_valid_votes(db, validator_keys):
+    assert chain_state(db) == {"next_height": 1}
     transaction = make_transaction()
     submit_transaction(db, transaction)
     proposal = build_proposal(db, 0)["block"]
@@ -157,6 +160,7 @@ def test_block_is_finalized_only_with_three_distinct_valid_votes(db, validator_k
     result = commit_block(db, proposal, make_votes(proposal, validator_keys))
 
     assert result["height"] == 1
+    assert chain_state(db) == {"next_height": 2}
     assert transaction_status(db, transaction["trans_id"])["status"] == "finalized"
     assert inventory_cache.items["item-1"]["quantity"] == 5
 
@@ -399,7 +403,16 @@ def test_noclients_blocks_clients_but_not_python_call(healthy_mode, monkeypatch,
     # ...while simbehaviour/health/python_call keep working.
     assert client.get("/api/v1/simbehaviour").status_code == 200
     assert client.get("/api/v1/health/live").status_code == 200
-    assert client.post("/api/v1/python_call", json={"flag": "setup_keys"}).status_code == 200
+    response = client.post(
+        "/api/v1/python_call",
+        json={"flag": "pre_prepare"},
+    )
+    assert response.status_code == 200
+    for removed_flag in ("setup_keys", "setup_keys_warning"):
+        assert client.post(
+            "/api/v1/python_call",
+            json={"flag": removed_flag},
+        ).status_code == 404
 
 
 def test_noresponse_blocks_python_call_too(healthy_mode, monkeypatch):
@@ -410,7 +423,10 @@ def test_noresponse_blocks_python_call_too(healthy_mode, monkeypatch):
     assert client.post("/api/v1/simbehaviour/noresponse").status_code == 200
 
     assert client.get("/api/v1/chain/history").status_code == 503
-    assert client.post("/api/v1/python_call", json={"flag": "setup_keys"}).status_code == 503
+    assert client.post(
+        "/api/v1/python_call",
+        json={"flag": "pre_prepare"},
+    ).status_code == 503
     # Control plane stays reachable so tests can recover the node.
     assert client.get("/api/v1/simbehaviour").status_code == 200
     assert client.get("/api/v1/health/live").status_code == 200
@@ -431,11 +447,27 @@ def test_byzantine_keeps_transactions_and_forges_consensus_signatures(
         assert result["duplicate"] is False
         assert db.get(PendingTransaction, transaction["trans_id"]).status == "pending"
 
-        # Signatures/keys are forged: honest verification must fail.
+        # Consensus signatures are forged: honest verification must fail.
         content = {"hello": "world"}
         forged_signature = distributed_service.sign_payload(content)
         assert distributed_service.verify_validator_signature("node_a", content, forged_signature) is False
-        assert distributed_service.local_public_key() != json.loads(settings.validator_public_keys)["node_a"]
+
+        proposal = prepare_proposal(db, 3)
+        block = proposal["block_data"]
+        hash_payload = {
+            "height": block["height"],
+            "prev_block_hash": block["prev_block_hash"],
+            "transactions": block["transactions"],
+        }
+        assert hashlib.sha256(canonical_json(hash_payload)).hexdigest() == block["block_hash"]
+        assert not verify_pre_prepare({
+            "height": block["height"],
+            "round": block["round"],
+            "proposer_id": "node_a",
+            "block_data": block,
+            "signature": proposal["proposer_sign"],
+        })
+        assert db.get(PendingTransaction, transaction["tx_id"]).status == "pending"
     finally:
         simbehaviour_service.set_mode(simbehaviour_service.HEALTHY)
 
@@ -453,9 +485,6 @@ def test_byzantine_equivocation_creates_two_validly_signed_proposals(
         submit_transaction(db, make_transaction(item_id="item-2"))
         proposal = prepare_proposal(db, 3)
 
-        assert distributed_service.local_public_key() == json.loads(
-            settings.validator_public_keys
-        )["node_a"]
         assert proposal["block_data"]["block_hash"] != proposal["equivocation_block_data"]["block_hash"]
         for block_data, signature in (
             (proposal["block_data"], proposal["proposer_sign"]),
@@ -475,6 +504,7 @@ def test_byzantine_equivocation_creates_two_validly_signed_proposals(
             serialization.PrivateFormat.Raw,
             serialization.NoEncryption(),
         )
+
         monkeypatch.setattr(
             settings,
             "validator_private_key",
@@ -511,3 +541,21 @@ def test_equivocation_scenario_requires_two_pending_transactions(
             prepare_proposal(db, 3)
     finally:
         simbehaviour_service.set_mode(simbehaviour_service.HEALTHY)
+
+
+def test_proposal_contains_at_most_500_transactions(db):
+    db.add_all(
+        PendingTransaction(
+            tx_id=f"tx-{index:04}",
+            transaction_json=json.dumps(
+                {"tx_id": f"tx-{index:04}", "tx_type": "inbound"}
+            ),
+            status="pending",
+        )
+        for index in range(501)
+    )
+    db.commit()
+
+    block = build_proposal(db, 0)["block"]
+
+    assert len(block["transactions"]) == 500

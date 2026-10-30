@@ -58,8 +58,17 @@ comunque far avanzare il round se il proposer non risponde.
 
 ## Identità, chiavi e serializzazione
 
-Le chiavi pubbliche dei validatori devono essere disponibili al servizio Python nel registro dei validatori (`VALIDATOR_PUBLIC_KEYS`).
-Il `validator_id` usato dal nodo deve coincidere con l'identità associata alla chiave pubblica.
+Gli ID dei validatori sono configurati staticamente tramite `NODE_ID` e gli
+indirizzi `PEERS` di Elixir. Ogni backend riceve la propria chiave privata
+Ed25519 Base64 in `VALIDATOR_PRIVATE_KEY`; tutti ricevono lo stesso oggetto
+`VALIDATOR_PUBLIC_KEYS`, che associa ogni ID alla chiave pubblica corrispondente.
+Non esistono endpoint o messaggi di scambio iniziale: le chiavi devono essere
+configurate correttamente prima dell'avvio. Il `validator_id` deve coincidere
+con l'ID del nodo e con la chiave associata nel registro statico.
+
+Compose fornisce anche `SERVER_SIGN_PRIVATE_KEY` per la firma delle risposte
+server. In questo progetto viene impostata sulla chiave privata Ed25519 del
+validatore locale, a meno che non si configuri una chiave server separata.
 
 Python serializza i contenuti firmati in JSON canonico (chiavi ordinate e separatori deterministici) e usa firme Ed25519 codificate in Base64. Il `block_hash` è SHA-256 del contenuto canonico del blocco.
 Le firme della proposta e dei voti sono distinte: la prima prova chi ha proposto il blocco, le seconde costituiscono il certificato di quorum.
@@ -92,14 +101,38 @@ ritenta le consegne fallite; duplicati sono innocui perché il mempool usa
 I validatori sono ordinati per ID in modo lessicografico, sia in Elixir sia in Python. Per un'altezza `height` e un round `round`, il proposer atteso è `validators[(height + round) mod numero_validatori]`.
 Con `N = 3f + 1`, il quorum è `2f + 1`.
 
+Python controlla periodicamente la mempool: quando ci sono almeno 500
+transazioni pendenti, oppure ci sono transazioni pendenti e sono trascorsi 15
+minuti dall'ultimo blocco committato (dall'avvio, se la chain è vuota), invia
+`POST /api/v1/proposal_request` al nodo Elixir locale. Elixir risponde
+`accepted: true` e avvia il normale PRE-PREPARE solo se è il proposer del round
+corrente e non sta già gestendo un blocco. Se non è leader, Python ritenta al
+controllo successivo. Ogni blocco contiene al massimo 500 transazioni.
+
+Il timeout di round è 8000 ms. Il timeout non cambia da solo il proposer:
+ciascun nodo firma e diffonde `ROUND_CHANGE`, e il round avanza solo quando è
+raggiunto il quorum BFT. Una nuova proposta riparte dal normale flusso di
+consenso e non salta le verifiche o le fasi di commit.
+
+All'avvio, Elixir chiede a Python `chain_state` e imposta l'altezza corrente a
+`next_height` restituita dal database locale (`ultimo blocco + 1`, oppure 1 se
+la chain è vuota). Se Python non è ancora raggiungibile o la risposta non è
+valida, Elixir ritenta e non avvia i round finché non ha uno stato valido.
+
 ### 1. Avvio del round e PRE-PREPARE
 
-1. Elixir avvia il timer del round e calcola il proposer.
-2. Il proposer resta in attesa di `trigger_block`; non crea blocchi vuoti
-   all'avvio del round.
-3. Python costruisce il blocco dalla mempool, lo firma come proposer e restituisce blocco e firma.
-4. Prima di inviare la proposta, il proposer chiede a Python anche la propria firma PREPARE. Poi invia il messaggio `pre_prepare` a tutti i peer e conserva la firma PREPARE locale.
-5. Ogni nodo chiede a Python di verificare hash, firma del proposer e scelta deterministica del proposer. Se la proposta è valida, firma PREPARE e invia il voto **unicast** al proposer.
+1. Elixir avvia il timeout BFT di 8000 ms e calcola il proposer.
+2. Python invia il trigger di proposta quando è raggiunta una delle soglie.
+   Elixir concede la proposta solo al proposer attuale; a quel punto chiede a
+   Python di preparare il blocco.
+3. Python costruisce il blocco dalla mempool, lo firma come proposer e
+   restituisce blocco e firma.
+4. Prima di inviare la proposta, il proposer chiede a Python anche la propria
+   firma PREPARE. Poi invia il messaggio `pre_prepare` a tutti i peer e conserva
+   la firma PREPARE locale.
+5. Ogni nodo chiede a Python di verificare hash, firma del proposer e scelta
+   deterministica del proposer. Se la proposta è valida, firma PREPARE e
+   invia il voto **unicast** al proposer.
 
 ### 2. PREPARE: raccolta del quorum di preparazione
 
@@ -135,9 +168,8 @@ Ogni richiesta è un singolo oggetto JSON con il campo `flag`. Le risposte indic
 
 | `flag` richiesta | Operazione Python | Risposta attesa |
 |------------------|-------------------|-----------------|
-| `setup_keys` | Restituire la chiave pubblica locale; la chiave privata resta interna al python. | `{"flag":"setup_keys","pub_key":"<base64>"}` |
-| `setup_keys_warning` | Validare e registrare la chiave pubblica del peer. | `{"flag":"setup_keys_warning","status":"success"}` |
-| `transaction` | Validare la firma del client, validare la transazione e inserirla idempotentemente nella mempool. Non alterare i campi firmati. | Transazione ricevuta con `status` e `duplicate`; il payload deve essere piatto, non annidato in `transaction`. |
+| `chain_state` | Leggere l'ultimo blocco committato per inizializzare l'altezza del motore Elixir. | `{"next_height":2}`; restituisce `1` quando la chain è vuota. |
+| `transaction` | Validare la firma del client, validare la transazione e inserirla idempotentemente nella mempool. Non alterare i campi firmati. | Transazione ricevuta con `status` e `duplicate`. |
 | `trigger_block` | Chiedere al motore locale di valutare la proposta del round corrente. | HTTP `200` con `{"ok":true,"routed":true}`; la proposta parte solo se il nodo locale è il proposer. |
 | `prepare_block` | Ordinare le transazioni pendenti e preparare il blocco successivo per il round richiesto. Firmare la coppia altezza/round/proposer/hash. | `{"flag":"prepare_block","block_data":{...},"proposer_sign":"<base64>"}`; se la mempool è vuota `block_data` è `null`. |
 | `pre_prepare` | Verificare il blocco, il suo hash, il proposer atteso e la firma della proposta. | `{"status":true}` oppure `{"status":false}`. |
@@ -312,6 +344,6 @@ La fault injection altera esclusivamente i messaggi di consenso. Per selezionare
 | `split_brain` | Il proposer invia `commit_proposal` solo ai primi due peer ordinati e non vota COMMIT. I voti COMMIT dei peer portano il certificato PREPARE e vengono diffusi a tutti. | I peer non informati verificano la prova e votano COMMIT; ogni nodo scrive solo dopo aver contato `2f+1` voti. |
 | `equivocation` | Il proposer invia due blocchi distinti, entrambi firmati, a due partizioni. Il blocco alternativo contiene un sottoinsieme delle transazioni del blocco principale, con la stessa altezza e lo stesso parent. | Ogni validatore onesto fissa una sola proposta per altezza/round e segnala le due firme del proposer; non firma entrambi i blocchi. |
 | `leader_offline` | Il proposer invia PRE-PREPARE e raccoglie PREPARE, ma non invia `commit_proposal` né il proprio `ROUND_CHANGE`. | In assenza di voti COMMIT, i nodi onesti raggiungono il quorum `ROUND_CHANGE` dopo il timeout e passano al round successivo. |
-| `invalid_signature` | Mantiene la simulazione precedente: il nodo altera una proposta e usa firme non verificabili. | Le firme e gli hash invalidi vengono rifiutati. |
+| `invalid_signature` | Il blocco mantiene dati e hash coerenti, ma il nodo bizantino genera firme di consenso non verificabili (inclusa la firma del proposer). | I peer rifiutano le firme invalide; i validatori onesti possono comunque raggiungere il quorum `2f+1`. |
 
 Il valore predefinito è `invalid_signature`. Lo scenario `equivocation` richiede almeno due transazioni pendenti; con meno di due, l'endpoint `prepare_block` restituisce un errore esplicito. `ByzantineEngine` è un supporto di fault injection chiamato dal `ConsensusEngine`, non un secondo motore avviato nella supervision tree. La modalità `noresponse` continua invece a scartare il traffico secondo il proprio comportamento dedicato.

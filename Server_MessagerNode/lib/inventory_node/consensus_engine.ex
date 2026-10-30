@@ -3,10 +3,14 @@ defmodule InventoryNode.ConsensusEngine do
   require Logger
 
   # tempo massimo per chiudere un blocco prima di cambiare Proposer
-  @round_timeout 10000
+  @round_timeout 8000
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, :ok, opts ++ [name: __MODULE__])
+  end
+
+  def request_proposal(reason, pending_count) do
+    GenServer.call(__MODULE__, {:proposal_request, reason, pending_count}, 15_000)
   end
 
   @impl true
@@ -35,16 +39,18 @@ defmodule InventoryNode.ConsensusEngine do
 
       # Stato BFT
       # numero del blocco
-      current_height: 1,
+      current_height: nil,
       # tentativo corrente per questa altezza
       current_round: 0,
       timer_ref: nil,
+      timeout_token: nil,
       temporary_signature: nil,
 
       # contatori per le fasi BFT (prepare_votes ora mappa validator_id => signature)
       prepare_votes: %{},
       commit_votes: %{},
       commit_started: false,
+      round_change_started: false,
       round_change_votes: %{},
 
       # Dati del blocco in lavorazione
@@ -52,7 +58,8 @@ defmodule InventoryNode.ConsensusEngine do
     }
 
     Logger.info("BFT-PoA Modificato Avviato. Nodo: #{node_id}. Quorum: #{quorum}/#{total_nodes}")
-    {:ok, start_round(state)}
+    send(self(), :initialize_from_python)
+    {:ok, state}
   end
 
   @impl true
@@ -106,6 +113,9 @@ defmodule InventoryNode.ConsensusEngine do
   def handle_info(message, state) do
     case message do
       :round_timeout ->
+        handle_info_round_timeout(state)
+
+      {:round_timeout, token} when token == state.timeout_token ->
         handle_info_round_timeout(state)
 
       {:verified_round_change, height, target_round, validator_id, true} ->
@@ -181,38 +191,13 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
-  # GESTIONE DEL ROUND E PROPOSER (ROUND-ROBIN)
-
-  defp start_round(state) do
-    if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
-    timer_ref = Process.send_after(self(), :round_timeout, @round_timeout)
-
-    # il proposer è deterministico: (altezza + round) mod (numero totale di nodi)
-    proposer_index = rem(state.current_height + state.current_round, length(state.validators))
-    current_proposer = Enum.at(state.validators, proposer_index)
-
-    # pulisce i voti del round precedente
-    new_state = %{
-      state
-      | timer_ref: timer_ref,
-        prepare_votes: %{},
-        commit_votes: %{},
-        commit_started: false,
-        pending_block: nil,
-        temporary_signature: nil
-    }
-
-    Logger.info("[Altezza #{state.current_height}] Proposer atteso: #{current_proposer}")
-    new_state
-  end
-
   defp handle_info_round_timeout(state) do
     if state.commit_started do
       Logger.warning(
         "COMMIT del blocco #{state.current_height} ancora in corso; attendo il quorum invece di cambiare round."
       )
 
-      {:noreply, %{state | timer_ref: Process.send_after(self(), :round_timeout, @round_timeout)}}
+      {:noreply, schedule_round_timeout(state)}
     else
       target_round = state.current_round + 1
 
@@ -236,9 +221,141 @@ defmodule InventoryNode.ConsensusEngine do
           Logger.error("Impossibile firmare ROUND_CHANGE per timeout: #{inspect(other)}")
       end
 
-      {:noreply, state}
+      {:noreply, %{state | round_change_started: true}}
     end
   end
+
+  # GESTIONE DEL ROUND E PROPOSER (ROUND-ROBIN)
+
+  defp schedule_round_timeout(state) do
+    if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
+    token = make_ref()
+    timer_ref = Process.send_after(self(), {:round_timeout, token}, @round_timeout)
+    %{state | timer_ref: timer_ref, timeout_token: token}
+  end
+
+  defp start_round(state) do
+    timed_state = schedule_round_timeout(state)
+
+    # il proposer è deterministico: (altezza + round) mod (numero totale di nodi)
+    proposer_index = rem(state.current_height + state.current_round, length(state.validators))
+    current_proposer = Enum.at(state.validators, proposer_index)
+
+    # pulisce i voti del round precedente
+    new_state = %{
+      timed_state
+      | prepare_votes: %{},
+        commit_votes: %{},
+        commit_started: false,
+        round_change_started: false,
+        pending_block: nil,
+        temporary_signature: nil
+    }
+
+    if current_proposer == state.node_id do
+      Logger.info(
+        "[Altezza #{state.current_height}] Sono il Proposer (Round #{state.current_round}); attendo il trigger Python."
+      )
+    else
+      Logger.info("[Altezza #{state.current_height}] Proposer atteso: #{current_proposer}")
+    end
+
+    new_state
+  end
+
+  @impl true
+  def handle_info(:initialize_from_python, state) do
+    case send_to_python_service(%{"flag" => "chain_state"}, state.python_host, state.python_port) do
+      {:ok, %{"next_height" => height}} when is_integer(height) and height > 0 ->
+        Logger.info("Altezza iniziale sincronizzata con Python: #{height}")
+        {:noreply, start_round(%{state | current_height: height})}
+
+      {:ok, response} ->
+        Logger.error("Python ha restituito uno stato blockchain non valido: #{inspect(response)}")
+        Process.send_after(self(), :initialize_from_python, 1_000)
+        {:noreply, state}
+
+      {:error, reason} ->
+        Logger.error("Impossibile leggere lo stato blockchain da Python: #{reason}")
+        Process.send_after(self(), :initialize_from_python, 1_000)
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:proposal_request, reason, pending_count}, _from, state)
+      when reason in ["mempool_full", "idle_timeout"] and is_integer(pending_count) and
+             pending_count > 0 do
+    cond do
+      proposer_for(state, state.current_height, state.current_round) != state.node_id ->
+        {:reply, %{"accepted" => false, "status" => "not_proposer"}, state}
+
+      state.commit_started or state.round_change_started or is_map(state.pending_block) ->
+        {:reply, %{"accepted" => false, "status" => "busy"}, state}
+
+      true ->
+        Logger.info(
+          "Trigger proposta ricevuto da Python: #{reason}, #{pending_count} transazioni pendenti."
+        )
+
+        proposed_state = propose_block(state)
+
+        if is_map(proposed_state.pending_block) do
+          proposed_state = schedule_round_timeout(proposed_state)
+
+          {:reply,
+           %{
+             "accepted" => true,
+             "status" => "ok",
+             "height" => state.current_height,
+             "round" => state.current_round
+           }, proposed_state}
+        else
+          {:reply, %{"accepted" => false, "status" => "no_block"}, proposed_state}
+        end
+    end
+  end
+
+  def handle_call({:proposal_request, _reason, _pending_count}, _from, state) do
+    {:reply, %{"accepted" => false, "status" => "invalid_request"}, state}
+  end
+
+  @impl true
+  def handle_info({:round_timeout, token}, %{timeout_token: token} = state) do
+    if state.commit_started do
+      Logger.warning(
+        "COMMIT del blocco #{state.current_height} ancora in corso; attendo il quorum invece di cambiare round."
+      )
+
+      {:noreply, schedule_round_timeout(state)}
+    else
+      target_round = state.current_round + 1
+
+      Logger.warning(
+        "Timeout blocco #{state.current_height}. Avvio fase ROUND_CHANGE verso il round #{target_round}"
+      )
+
+      payload = %{
+        "flag" => "round_change",
+        "reason" => "timeout",
+        "height" => state.current_height,
+        "target_round" => target_round,
+        "validator_id" => state.node_id
+      }
+
+      case send_to_python_service(payload, state.python_host, state.python_port) do
+        {:ok, %{"signature" => signature} = signed_payload} when is_binary(signature) ->
+          broadcast_to_all(state.peers, {:round_change, signed_payload})
+
+        other ->
+          Logger.error("Impossibile firmare ROUND_CHANGE per timeout: #{inspect(other)}")
+      end
+
+      {:noreply, %{state | round_change_started: true}}
+    end
+  end
+
+  def handle_info({:round_timeout, _stale_token}, state), do: {:noreply, state}
 
   # ROUND CHANGE
 

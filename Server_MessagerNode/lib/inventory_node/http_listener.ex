@@ -7,9 +7,10 @@ defmodule InventoryNode.HTTPListener do
   Erlang-term wire protocol (`binary_to_term`) for intra-cluster gossip on
   port 4000. This listener binds the per-node simbehaviour port (default 4001;
   deployed as 6001..6004 via ELIXIR_HTTP_PORT) and handles
-  `POST /api/v1/simbehaviour` (mode forwarding from Python) and
+  `POST /api/v1/simbehaviour` (mode forwarding from Python),
   `POST /api/v1/python_call` (JSON payloads routed through
-  `InventoryNode.Router`).
+  `InventoryNode.Router`), and `POST /api/v1/proposal_request` (mempool/time
+  trigger requests from Python).
 
   Port map per node: Python owns 8000 in its own container (clients AND
   Elixir share that one socket, routed by URL path), Elixir owns 4000
@@ -50,7 +51,10 @@ defmodule InventoryNode.HTTPListener do
         {:ok, socket} =
           :gen_tcp.listen(port, [:binary, packet: :raw, active: false, reuseaddr: true])
 
-        Logger.info("HTTP Listener (Elixir) in ascolto su http://0.0.0.0:#{port} (per il backend Python)")
+        Logger.info(
+          "HTTP Listener (Elixir) in ascolto su http://0.0.0.0:#{port} (per il backend Python)"
+        )
+
         loop_acceptor(socket)
       end)
 
@@ -86,7 +90,10 @@ defmodule InventoryNode.HTTPListener do
         :gen_tcp.send(client, build_response(dispatch(path, headers, body)))
 
       {:ok, _} ->
-        :gen_tcp.send(client, build_response({405, "Method Not Allowed", %{"error" => "method not allowed"}}))
+        :gen_tcp.send(
+          client,
+          build_response({405, "Method Not Allowed", %{"error" => "method not allowed"}})
+        )
 
       {:error, :closed} ->
         :ok
@@ -119,7 +126,9 @@ defmodule InventoryNode.HTTPListener do
               [method, path, version] ->
                 headers = parse_headers(header_lines)
                 body = read_body(socket, headers, leftover)
-                {:ok, %{method: method, path: path, version: version, headers: headers, body: body}}
+
+                {:ok,
+                 %{method: method, path: path, version: version, headers: headers, body: body}}
 
               _ ->
                 {:error, :bad_request}
@@ -218,7 +227,8 @@ defmodule InventoryNode.HTTPListener do
             {200, "OK", %{"ok" => true, "mode" => to_string(set_mode)}}
 
           {:error, _} ->
-            {400, "Bad Request", %{"error" => "unknown mode", "allowed" => InventoryNode.SimBehaviour.modes()}}
+            {400, "Bad Request",
+             %{"error" => "unknown mode", "allowed" => InventoryNode.SimBehaviour.modes()}}
         end
 
       _ ->
@@ -234,6 +244,29 @@ defmodule InventoryNode.HTTPListener do
 
       {:ok, _payload} ->
         {400, "Bad Request", %{"error" => "expected a JSON object"}}
+
+      {:error, _} ->
+        {400, "Bad Request", %{"error" => "invalid JSON"}}
+    end
+  end
+
+  defp dispatch("/api/v1/proposal_request", _headers, body) do
+    case JSON.decode(body) do
+      {:ok, %{"reason" => reason, "pending_transactions" => count}}
+      when reason in ["mempool_full", "idle_timeout"] and is_integer(count) and count > 0 ->
+        try do
+          {200, "OK", InventoryNode.ConsensusEngine.request_proposal(reason, count)}
+        catch
+          :exit, reason ->
+            Logger.error(
+              "Consensus engine unavailable for a proposal request: #{inspect(reason)}"
+            )
+
+            {503, "Service Unavailable", %{"accepted" => false, "status" => "unavailable"}}
+        end
+
+      {:ok, _payload} ->
+        {400, "Bad Request", %{"error" => "expected a valid proposal trigger and pending count"}}
 
       {:error, _} ->
         {400, "Bad Request", %{"error" => "invalid JSON"}}

@@ -12,10 +12,8 @@ set -Eeuo pipefail
 #   node_a -> 8001 / 4001      node_b -> 8002 / 4002
 #   node_c -> 8003 / 4003      node_d -> 8004 / 4004
 #
-# The 4 Ed25519 validator keypairs and the shared secrets (JWT secret, app
-# token, bootstrap admin password) are generated once locally so the whole
-# cluster agrees on NODE_PUBLIC_KEYS. They live only on the VPS host (plus a
-# transient local temp dir while deploying) and never in git.
+# The 4 Ed25519 validator keypairs and shared secrets are generated once for
+# the deployment and provided to every node through protected environment files.
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 NODES="node_a node_b node_c node_d"
@@ -145,7 +143,15 @@ for node in node_a node_b node_c node_d; do
   chmod 700 "$node_env_dir"
   private_var="${node}_private"
   public_var="${node}_public"
-  awk     -v node_id="$node"     -v private_key="${!private_var}"     -v public_keys="$PUBLIC_KEYS"     -v jwt_secret="$JWT_SECRET"     -v app_client_token="$APP_CLIENT_TOKEN"     -v initial_admin_password="$INITIAL_ADMIN_PASSWORD"     '
+  awk \
+    -v node_id="$node" \
+    -v suffix="$suffix" \
+    -v private_key="${!private_var}" \
+    -v public_keys="$PUBLIC_KEYS" \
+    -v jwt_secret="$JWT_SECRET" \
+    -v app_client_token="$APP_CLIENT_TOKEN" \
+    -v initial_admin_password="$INITIAL_ADMIN_PASSWORD" \
+    '
       /^JWT_SECRET=/ { print "JWT_SECRET=" jwt_secret; next }
       /^NODE_ID=/ { print "NODE_ID=" node_id; next }
       /^NODE_PRIVATE_KEY=/ { print "NODE_PRIVATE_KEY=" private_key; next }
@@ -157,7 +163,6 @@ for node in node_a node_b node_c node_d; do
       /^ELIXIR_HTTP_PORT=/ { print "ELIXIR_HTTP_PORT=600" suffix; next }
       { print }
     ' "$ROOT_DIR/Server_Python/.env" > "$node_env_dir/.env"
-
   {
     printf 'VALIDATOR_PRIVATE_KEY=%s\n' "${!private_var}"
     printf 'VALIDATOR_PUBLIC_KEYS=%s\n' "$PUBLIC_KEYS"
@@ -296,7 +301,7 @@ for node in $NODES; do
   }
   interface_ready=false
   for attempt in {1..30}; do
-    if docker logs "$interface" 2>&1 | grep -q 'BFT-PoA Avviato'; then
+    if docker logs "$interface" 2>&1 | grep -q 'BFT-PoA Modificato Avviato'; then
       interface_ready=true
       break
     fi
