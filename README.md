@@ -31,6 +31,27 @@ docker compose ps
 curl http://localhost:8001/api/v1/health/ready
 ```
 
+## Test block creation with many transactions
+
+The project includes `Server_Python/load_test.py`. After the services are
+running, rebuild them so the script is present in the Python image, then run:
+
+```bash
+docker compose up -d --build
+docker compose exec -T python_validator_a python /app/load_test.py --count 1998
+```
+
+The script creates signed test transactions, sends them through node A's
+Elixir router (which forwards them to the other nodes), and checks chain
+history until they are committed or the timeout is reached. The default is
+1,998 transactions; each block holds at most 500, so expect about four new
+blocks if there are no other pending transactions. You can change the amount
+with `--count`, or send through another node with `--node node_b` (also
+`node_c` or `node_d`).
+
+This test commits real blocks and adds stock for a test item to each node's
+persistent database. Run it on test data, not a production deployment.
+
 ## Test Byzantine behaviour
 
 Node D can simulate four consensus faults. Choose one scenario in the root
@@ -99,6 +120,25 @@ curl -X POST http://localhost:8004/api/v1/simbehaviour/healthy
 ```
 
 The mode resets to `healthy` when the Python backend restarts.
+
+## Deploy to one VPS
+
+`deploy.sh` is a manual deployment script; Docker Compose and the application
+do not run it automatically. From the project root, run:
+
+```bash
+bash deploy.sh
+```
+
+It asks for the VPS address, SSH user, and remote project path (or reads
+`VPS_IP`, `VPS_USER`, `VPS_PASS`, and `VPS_PATH` from the environment). It
+packages the Python and Elixir code, creates validator keys and deployment
+secrets, copies them to the VPS over SSH, builds the Docker images, and starts
+the four nodes. It checks backend health and that each consensus engine
+started. The remote code folders and containers are replaced during deploy;
+named database volumes are not deleted. The script requires SSH, SCP, tar,
+and OpenSSL locally, plus Docker on the VPS; `sshpass` is needed only for SSH
+password authentication.
 
 ## Stop
 
