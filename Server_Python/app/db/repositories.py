@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import (
@@ -110,6 +110,11 @@ def get_block_by_hash(db: Session, block_hash: str) -> ChainBlock | None:
     return db.scalar(stmt)
 
 
+def get_block_by_height(db: Session, height: int) -> ChainBlock | None:
+    stmt = select(ChainBlock).where(ChainBlock.n_block == height)
+    return db.scalar(stmt)
+
+
 def get_all_blocks(db: Session) -> list[ChainBlock]:
     stmt = select(ChainBlock).order_by(ChainBlock.n_block.asc())
     return list(db.scalars(stmt))
@@ -192,6 +197,7 @@ def add_block_vote(
     block_hash: str,
     validator_id: str,
     signature: str,
+    phase: str = "prepare",
 ) -> BlockVote:
     vote = BlockVote(
         height=height,
@@ -199,10 +205,31 @@ def add_block_vote(
         block_hash=block_hash,
         validator_id=validator_id,
         signature=signature,
+        phase=phase,
     )
     db.add(vote)
     db.flush()
     return vote
+
+
+def replace_block_votes(
+    db: Session,
+    *,
+    block_hash: str,
+    votes: list[dict],
+    phase: str,
+) -> None:
+    db.execute(delete(BlockVote).where(BlockVote.block_hash == block_hash))
+    for vote in votes:
+        add_block_vote(
+            db,
+            height=vote["height"],
+            round_number=vote["round"],
+            block_hash=block_hash,
+            validator_id=vote["validator_id"],
+            signature=vote["signature"],
+            phase=phase,
+        )
 
 
 def get_block_votes_for_hash(db: Session, block_hash: str) -> list[BlockVote]:

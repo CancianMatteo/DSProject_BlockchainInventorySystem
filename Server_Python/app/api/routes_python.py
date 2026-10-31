@@ -15,15 +15,15 @@ def python_call(
     payload: dict[str, Any] = Body(...),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Endpoint interno usato dal motore di consenso Elixir
-    (InventoryNode.PythonClient): il campo "flag" seleziona l'operazione.
+    """Internal endpoint used by the Elixir consensus engine
+    (InventoryNode.PythonClient): the "flag" field selects the operation.
 
-    Ogni handler restituisce esattamente la struttura che il lato Elixir si
-    aspetta (vedi InventoryNode.ConsensusEngine e InventoryNode.Router).
+    Each handler returns exactly the structure expected by Elixir
+    (see InventoryNode.ConsensusEngine and InventoryNode.Router).
     """
     flag = payload.get("flag")
 
-    # --- Transazioni (mempool) ---
+    # --- Transactions (mempool) ---
     if flag == "transaction":
         result = distributed_service.submit_transaction(db, payload)
         return {
@@ -35,7 +35,7 @@ def python_call(
     if flag == "chain_state":
         return distributed_service.chain_state(db)
 
-    # --- Proposta del leader (PRE-PREPARE) ---
+    # --- Leader proposal (PRE-PREPARE) ---
     if flag == "prepare_block":
         round_number = payload.get("round")
         if (
@@ -57,7 +57,7 @@ def python_call(
         proof = distributed_service.create_pre_prepare_conflict_proof(payload)
         return {"status": proof is not None, "proof": proof}
 
-    # --- Voti PREPARE / COMMIT ---
+    # --- PREPARE / COMMIT votes ---
     if flag == "prepare":
         return distributed_service.sign_vote("prepare", payload)
 
@@ -66,6 +66,12 @@ def python_call(
 
     if flag == "commit_proposal":
         return {"status": distributed_service.verify_prepare_certificate(payload)}
+
+    if flag == "verify_commit_certificate":
+        return {"status": distributed_service.verify_commit_certificate(payload)}
+
+    if flag == "get_finalized_block":
+        return distributed_service.get_finalized_block(db, payload.get("height"))
 
     if flag == "commit":
         return distributed_service.sign_vote("commit", payload)
@@ -80,9 +86,24 @@ def python_call(
     if flag == "verified_round_change":
         return {"status": distributed_service.verify_round_change(payload)}
 
-    # --- Scrittura del blocco ratificato ---
+    # --- Persist finalized block ---
     if flag == "write_block":
-        return distributed_service.write_committed_block(db, payload.get("block_data"))
+        return distributed_service.write_committed_block(
+            db,
+            payload.get("block_data"),
+            payload.get("proposer_id"),
+            payload.get("proposer_signature"),
+            payload.get("commit_signatures"),
+        )
+
+    if flag == "import_finalized_block":
+        return distributed_service.write_committed_block(
+            db,
+            payload.get("block_data"),
+            payload.get("proposer_id"),
+            payload.get("proposer_signature"),
+            payload.get("commit_signatures"),
+        )
 
     raise AppError(
         "UNKNOWN_FLAG",

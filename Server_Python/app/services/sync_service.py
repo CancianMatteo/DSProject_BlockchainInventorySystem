@@ -35,6 +35,7 @@ def serialize_block(db: Session, block) -> dict:
                 "block_hash": vote.block_hash,
                 "validator_id": vote.validator_id,
                 "signature": vote.signature,
+                "phase": vote.phase,
             }
             for vote in repositories.get_block_votes_for_hash(db, block.block_hash)
         ],

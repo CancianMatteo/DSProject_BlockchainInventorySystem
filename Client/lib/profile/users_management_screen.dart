@@ -44,7 +44,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Sessione non valida. Riesegui il login.'),
+          content: Text('Invalid session. Please sign in again.'),
           backgroundColor: Colors.red,
         ),
       );
@@ -68,7 +68,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          response.errorMessage ?? 'Errore durante il caricamento utenti',
+          response.errorMessage ?? 'Failed to load users',
         ),
         backgroundColor: Colors.red,
       ),
@@ -97,7 +97,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
     if (!response.ok) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(response.errorMessage ?? 'Errore creazione utente'),
+          content: Text(response.errorMessage ?? 'Failed to create user'),
           backgroundColor: Colors.red,
         ),
       );
@@ -109,7 +109,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
     _emailController.clear();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Utente creato: password temporanea inviata via email'),
+        content: Text('User created. A temporary password was sent by email.'),
         backgroundColor: Colors.green,
       ),
     );
@@ -127,17 +127,17 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
     final bool? confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Riabilita utente'),
-        content: Text('Confermi la riattivazione di $surname $name ($email)?'),
+        title: const Text('Reactivate user'),
+        content: Text('Reactivate $surname $name ($email)?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Annulla'),
+            child: const Text('Cancel'),
           ),
           ElevatedButton(
             onPressed: () => Navigator.of(context).pop(true),
             style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-            child: const Text('Riabilita'),
+            child: const Text('Reactivate'),
           ),
         ],
       ),
@@ -151,7 +151,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
     if (!response.ok) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(response.errorMessage ?? 'Errore riattivazione utente'),
+          content: Text(response.errorMessage ?? 'Failed to reactivate user'),
           backgroundColor: Colors.red,
         ),
       );
@@ -160,7 +160,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Utente riabilitato'),
+        content: Text('User reactivated'),
         backgroundColor: Colors.green,
       ),
     );
@@ -178,19 +178,19 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
     final bool? confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Disabilita utente'),
+        title: const Text('Disable user'),
         content: Text(
-          'Confermi la disabilitazione di $surname $name ($email)?',
+          'Disable $surname $name ($email)?',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Annulla'),
+            child: const Text('Cancel'),
           ),
           ElevatedButton(
             onPressed: () => Navigator.of(context).pop(true),
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('Disabilita'),
+            child: const Text('Disable'),
           ),
         ],
       ),
@@ -205,7 +205,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            response.errorMessage ?? 'Errore disabilitazione utente',
+            response.errorMessage ?? 'Failed to disable user',
           ),
           backgroundColor: Colors.red,
         ),
@@ -215,7 +215,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Utente disabilitato'),
+        content: Text('User disabled'),
         backgroundColor: Colors.green,
       ),
     );
@@ -232,7 +232,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
       return Scaffold(
         appBar: AppBar(title: const Text('Users Management')),
         body: const Center(
-          child: Text('Accesso consentito solo agli amministratori'),
+          child: Text('Only administrators can access this page'),
         ),
       );
     }
@@ -256,7 +256,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Crea Nuovo Utente',
+                        'Create new user',
                         style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w700,
@@ -266,10 +266,10 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
                       TextFormField(
                         controller: _nameController,
                         textInputAction: TextInputAction.next,
-                        decoration: const InputDecoration(labelText: 'Nome*'),
+                        decoration: const InputDecoration(labelText: 'First name*'),
                         validator: (value) =>
                             value == null || value.trim().isEmpty
-                            ? 'Campo obbligatorio'
+                            ? 'This field is required'
                             : null,
                       ),
                       const SizedBox(height: 10),
@@ -277,11 +277,11 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
                         controller: _surnameController,
                         textInputAction: TextInputAction.next,
                         decoration: const InputDecoration(
-                          labelText: 'Cognome*',
+                          labelText: 'Last name*',
                         ),
                         validator: (value) =>
                             value == null || value.trim().isEmpty
-                            ? 'Campo obbligatorio'
+                            ? 'This field is required'
                             : null,
                       ),
                       const SizedBox(height: 10),
@@ -292,8 +292,8 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
                         decoration: const InputDecoration(labelText: 'Email*'),
                         validator: (value) {
                           final raw = value?.trim() ?? '';
-                          if (raw.isEmpty) return 'Campo obbligatorio';
-                          if (!raw.contains('@')) return 'Email non valida';
+                          if (raw.isEmpty) return 'This field is required';
+                          if (!raw.contains('@')) return 'Invalid email address';
                           return null;
                         },
                       ),
@@ -311,7 +311,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
                                     strokeWidth: 2,
                                   ),
                                 )
-                              : const Text('Crea utente'),
+                              : const Text('Create user'),
                         ),
                       ),
                     ],
@@ -324,13 +324,13 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text(
-                  'Utenti',
+                  'Users',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
                 ),
                 TextButton.icon(
                   onPressed: _loading ? null : _loadUsers,
                   icon: const Icon(Icons.refresh),
-                  label: const Text('Aggiorna'),
+                  label: const Text('Refresh'),
                 ),
               ],
             ),
@@ -343,7 +343,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
               const Card(
                 child: Padding(
                   padding: EdgeInsets.all(16),
-                  child: Text('Nessun utente trovato'),
+                  child: Text('No users found'),
                 ),
               )
             else
@@ -360,7 +360,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
                       style: TextStyle(color: textColor),
                     ),
                     subtitle: Text(
-                      '${user['email'] ?? ''} - ruolo: ${user['role'] ?? ''}',
+                      '${user['email'] ?? ''} - role: ${user['role'] ?? ''}',
                       style: TextStyle(color: textColor),
                     ),
                     trailing: !isCurrentUser
@@ -382,7 +382,7 @@ class _UsersManagementScreenState extends State<UsersManagementScreen> {
                                   label: const Text('Riabilita'),
                                 ))
                         : const Text(
-                            'Utente corrente',
+                            'Current user',
                             style: TextStyle(color: Colors.black54),
                           ),
                   ),

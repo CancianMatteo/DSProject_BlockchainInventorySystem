@@ -14,8 +14,8 @@ defmodule InventoryNode.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      # :public_key/:ssl sono necessari a :httpc anche per richieste HTTP semplici,
-      # perché calcola di default le opzioni TLS prima di ogni chiamata.
+      # :public_key/:ssl are required by :httpc even for plain HTTP requests,
+      # because it computes TLS options by default before every request.
       extra_applications: [:inets, :ssl, :public_key, :logger],
       mod: {InventoryNode.Application, []}
     ]

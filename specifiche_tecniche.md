@@ -33,15 +33,26 @@ crittografiche.
    proposer con una proposta già attiva non ne crea una seconda.
 5. **Consenso.** Il proposer diffonde `pre_prepare`; i nodi verificano la
    proposta e votano `prepare`. Dopo il quorum PREPARE viene diffuso
-   `commit_proposal`; dopo il quorum COMMIT ogni Python riceve `write_block` e
-   persiste il blocco.
-6. **Conferma e sincronizzazione.** Le transazioni incluse passano da
+   `commit_proposal`; i validatori verificano il certificato PREPARE e firmano
+   COMMIT. Dopo il quorum COMMIT, Elixir passa a Python il blocco, la firma del
+   proposer e le firme COMMIT raccolte. Python verifica di nuovo firma del
+   proposer, quorum e firme COMMIT, quindi persiste il blocco e il certificato.
+6. **Conflitto e recupero.** Una prova valida di equivocation ricevuta prima
+   dell'avvio del voto COMMIT blocca il voto locale e viene inoltrata agli
+   altri validatori. Se il voto COMMIT era già iniziato e il blocco principale
+   raggiunge il quorum, i nodi che lo finalizzano conservano il certificato
+   COMMIT. Quando arriva la prova, possono recuperare quel pacchetto dal
+   database Python e diffonderlo; un nodo che conserva la proposta alternativa
+   verifica il certificato COMMIT, importa il blocco idempotentemente e
+   riallinea l'altezza. Il certificato PREPARE non viene usato come prova di
+   finalizzazione.
+7. **Conferma e sincronizzazione.** Le transazioni incluse passano da
    `pending` a `finalized`. Il client interroga
    `POST /api/v1/chain/transaction_status` per la conferma della singola
    transazione e usa `POST /api/v1/chain/blockchain_sync` per riallineare la
    catena e l'inventario.
 
-Il timeout di round di Elixir (`10` secondi) non è un secondo criterio per
+Il timeout di round di Elixir (`8` secondi) non è un secondo criterio per
 creare automaticamente un blocco: serve a cambiare proposer/round quando il
 consenso non progredisce. Il blocco viene proposto solo quando Python segnala
 che esistono transazioni e il proposer riceve `trigger_block`; il timer può
@@ -300,6 +311,90 @@ Python verifica che i due hash siano diversi e che entrambe le firme del propose
 ```
 
 La risposta `proof` contiene `flag: "pre_prepare_conflict_proof"`, altezza, round, proposer e validator, entrambi gli hash e le rispettive firme, più `validator_signature`. Elixir cambia il flag in `round_change` e aggiunge `target_round = round + 1`. Ogni peer verifica che `target_round` sia coerente, ricontrolla le firme del proposer e verifica la firma dell'accusatore prima di conteggiare il voto.
+
+**Finalizzazione e recupero con COMMIT**
+
+Quando il quorum COMMIT è raggiunto, Elixir invia a Python `write_block` con
+`block_data`, `proposer_id`, `proposer_signature` e `commit_signatures`:
+
+```json
+{
+  "flag": "write_block",
+  "proposer_id": "node_b",
+  "proposer_signature": "<firma-proposer>",
+  "block_data": {"height": 1, "round": 0, "block_hash": "..."},
+  "commit_signatures": [
+    {"validator_id": "node_a", "signature": "<firma-commit>"},
+    {"validator_id": "node_b", "signature": "<firma-commit>"},
+    {"validator_id": "node_c", "signature": "<firma-commit>"}
+  ]
+}
+```
+
+Il contenuto firmato da ogni voto COMMIT include `phase: "commit"`,
+`height`, `round`, `validator_id` e `block_hash`. Python rifiuta firme PREPARE
+presentate come COMMIT o firme duplicate, e richiede il quorum `2f + 1`.
+`block_votes.phase` identifica la fase persistita; le righe storiche senza
+questa colonna vengono migrate come `prepare`, mentre le nuove finalizzazioni
+salvano i voti `commit`.
+
+Per una prova di equivocation successiva alla finalizzazione, Elixir chiede a
+Python riceve `get_finalized_block` con l'altezza:
+
+```json
+{"flag": "get_finalized_block", "height": 1}
+```
+
+Se il blocco e il certificato COMMIT persistiti sono validi, la risposta è:
+
+```json
+{
+  "status": true,
+  "block_data": {
+    "height": 1,
+    "round": 0,
+    "prev_block_hash": null,
+    "transactions": [
+      {
+        "trans_id": "<transaction-id>",
+        "item_id": "item-1",
+        "quantity": 1,
+        "location": "warehouse-1",
+        "client_ID": "operator@example.test",
+        "timestamp": "<ISO-8601>",
+        "client_public_key": "<chiave-pubblica-Base64>",
+        "signature": "<firma-client-Base64>",
+        "item_catalog": {
+          "item-1": {
+            "itemName": "Item",
+            "brand": "Brand",
+            "category": "General"
+          }
+        }
+      }
+    ],
+    "block_hash": "..."
+  },
+  "proposer_id": "node_b",
+  "proposer_signature": "<firma-proposer>",
+  "commit_signatures": [
+    {"validator_id": "node_a", "signature": "<firma-commit>"},
+    {"validator_id": "node_b", "signature": "<firma-commit>"},
+    {"validator_id": "node_c", "signature": "<firma-commit>"}
+  ]
+}
+```
+
+Se il blocco non è presente o non ha un certificato valido, Python restituisce
+`{"status": false}`.
+
+Il messaggio gossip `{:finalized_block, package}` viene ricevuto dal Router e
+inoltrato a `import_finalized_block`, che riceve lo stesso pacchetto aggiungendo
+`"flag": "import_finalized_block"`. Python verifica nuovamente certificato e
+firma del proposer e controlla che il blocco estenda la testa locale. In caso
+positivo restituisce `{"status": true}` (e `duplicate: true` se già presente);
+una ripetizione dello stesso blocco è idempotente, mentre un blocco che non
+estende la catena locale viene rifiutato.
 
 ## Transazioni e gossip
 

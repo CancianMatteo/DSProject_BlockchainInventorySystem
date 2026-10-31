@@ -1,4 +1,4 @@
-# reti separate per ogni nodo
+# Separate network for each node.
 networks:
   cluster_network:
     driver: bridge
@@ -11,7 +11,7 @@ networks:
   node_d_internal:
     internal: true
 
-# volumi separati per evitare conflitti nel DB (SQLite)
+# Separate volumes to avoid SQLite database conflicts.
 volumes:
   bis_data_a:
   bis_data_b:

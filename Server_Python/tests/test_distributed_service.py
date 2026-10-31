@@ -7,13 +7,13 @@ from datetime import datetime, timezone
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
 from app.api.routes_chain import get_chain_history
-from app.db.models import PendingTransaction
+from app.db.models import BlockVote, PendingTransaction
 from app.db.repositories import insert_block
 from app.db.session import Base
 from app.services import simbehaviour_service
@@ -26,6 +26,7 @@ from app.services.distributed_service import (
     chain_from,
     commit_block,
     create_pre_prepare_conflict_proof,
+    get_finalized_block,
     import_block,
     prepare_proposal,
     submit_transaction,
@@ -34,6 +35,8 @@ from app.services.distributed_service import (
     verify_pre_prepare,
     verify_pre_prepare_conflict_proof,
     verify_vote,
+    verify_commit_certificate,
+    write_committed_block,
 )
 
 
@@ -131,6 +134,40 @@ def make_votes(block: dict, keys: dict[str, Ed25519PrivateKey]) -> list[dict]:
     return votes
 
 
+def make_finalization_certificate(
+    block: dict,
+    keys: dict[str, Ed25519PrivateKey],
+    phase: str = "commit",
+) -> tuple[str, str, list[dict]]:
+    validator_ids = sorted(keys)
+    proposer_id = validator_ids[(block["height"] + block["round"]) % len(validator_ids)]
+    proposer_payload = {
+        "height": block["height"],
+        "round": block["round"],
+        "proposer_id": proposer_id,
+        "block_hash": block["block_hash"],
+    }
+    proposer_signature = base64.b64encode(
+        keys[proposer_id].sign(canonical_json(proposer_payload))
+    ).decode("ascii")
+    votes = []
+    for validator_id in validator_ids[:3]:
+        vote_payload = {
+            "phase": phase,
+            "height": block["height"],
+            "round": block["round"],
+            "validator_id": validator_id,
+            "block_hash": block["block_hash"],
+        }
+        votes.append({
+            "validator_id": validator_id,
+            "signature": base64.b64encode(
+                keys[validator_id].sign(canonical_json(vote_payload))
+            ).decode("ascii"),
+        })
+    return proposer_id, proposer_signature, votes
+
+
 def test_submit_is_idempotent_and_requires_valid_client_signature(db):
     transaction = make_transaction()
     accepted = submit_transaction(db, transaction)
@@ -163,6 +200,155 @@ def test_block_is_finalized_only_with_three_distinct_valid_votes(db, validator_k
     assert chain_state(db) == {"next_height": 2}
     assert transaction_status(db, transaction["trans_id"])["status"] == "finalized"
     assert inventory_cache.items["item-1"]["quantity"] == 5
+
+
+def test_finalized_block_persists_commit_certificate_and_import_is_idempotent(
+    db, validator_keys
+):
+    transaction = make_transaction()
+    submit_transaction(db, transaction)
+    block = build_proposal(db, 0)["block"]
+    proposer_id, proposer_signature, commit_signatures = make_finalization_certificate(
+        block, validator_keys
+    )
+    certificate = {
+        "block_data": block,
+        "proposer_id": proposer_id,
+        "proposer_signature": proposer_signature,
+        "commit_signatures": commit_signatures,
+    }
+
+    assert verify_commit_certificate(certificate)
+    assert not verify_commit_certificate({
+        **certificate,
+        "commit_signatures": commit_signatures[:2],
+    })
+    assert write_committed_block(
+        db, block, proposer_id, proposer_signature, commit_signatures
+    ) == {"status": True}
+
+    stored_votes = db.query(BlockVote).filter_by(block_hash=block["block_hash"]).all()
+    assert len(stored_votes) == 3
+    assert {vote.phase for vote in stored_votes} == {"commit"}
+    recovered = get_finalized_block(db, block["height"])
+    assert recovered["status"] is True
+    assert recovered["proposer_id"] == proposer_id
+    assert recovered["proposer_signature"] == proposer_signature
+    assert len(recovered["commit_signatures"]) == 3
+    assert write_committed_block(
+        db, block, proposer_id, proposer_signature, commit_signatures
+    ) == {"status": True, "duplicate": True}
+
+
+def test_finalized_block_rejects_prepare_signatures_as_commit_certificate(
+    db, validator_keys
+):
+    transaction = make_transaction()
+    submit_transaction(db, transaction)
+    block = build_proposal(db, 0)["block"]
+    proposer_id, proposer_signature, prepare_signatures = make_finalization_certificate(
+        block, validator_keys, phase="prepare"
+    )
+    certificate = {
+        "block_data": block,
+        "proposer_id": proposer_id,
+        "proposer_signature": proposer_signature,
+        "commit_signatures": prepare_signatures,
+    }
+
+    assert not verify_commit_certificate(certificate)
+    with pytest.raises(DistributedReject, match="COMMIT signature is invalid"):
+        write_committed_block(
+            db, block, proposer_id, proposer_signature, prepare_signatures
+        )
+
+
+def test_finalized_commit_certificate_imports_on_a_lagging_node(db, validator_keys):
+    transaction = make_transaction()
+    submit_transaction(db, transaction)
+    block = build_proposal(db, 0)["block"]
+    proposer_id, proposer_signature, commit_signatures = make_finalization_certificate(
+        block, validator_keys
+    )
+    lagging_engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    Base.metadata.create_all(lagging_engine)
+
+    try:
+        with Session(lagging_engine, autoflush=False, future=True) as lagging_db:
+            inventory_cache.reset()
+            result = write_committed_block(
+                lagging_db,
+                block,
+                proposer_id,
+                proposer_signature,
+                commit_signatures,
+            )
+
+            assert result == {"status": True}
+            assert chain_state(lagging_db) == {"next_height": 2}
+            assert {
+                vote.phase
+                for vote in lagging_db.query(BlockVote)
+                .filter_by(block_hash=block["block_hash"])
+                .all()
+            } == {"commit"}
+    finally:
+        inventory_cache.reset()
+        Base.metadata.drop_all(lagging_engine)
+        lagging_engine.dispose()
+
+
+def test_block_vote_phase_migration_preserves_existing_votes(monkeypatch):
+    legacy_engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    with legacy_engine.begin() as connection:
+        connection.execute(text(
+            """
+            CREATE TABLE block_votes (
+                id INTEGER NOT NULL PRIMARY KEY,
+                height INTEGER NOT NULL,
+                round INTEGER NOT NULL,
+                block_hash VARCHAR(128) NOT NULL,
+                validator_id VARCHAR(128) NOT NULL,
+                signature TEXT NOT NULL,
+                CONSTRAINT uq_block_votes_height_round_validator
+                    UNIQUE (height, round, validator_id)
+            )
+            """
+        ))
+        connection.execute(text(
+            """
+            INSERT INTO block_votes
+                (id, height, round, block_hash, validator_id, signature)
+            VALUES (1, 1, 0, 'legacy-hash', 'node_a', 'legacy-signature')
+            """
+        ))
+
+    try:
+        from app import main
+
+        monkeypatch.setattr(main, "engine", legacy_engine)
+        main._migrate_block_vote_phase()
+
+        with Session(legacy_engine) as migrated_db:
+            vote = migrated_db.get(BlockVote, 1)
+            assert vote is not None
+            assert vote.signature == "legacy-signature"
+            assert vote.phase == "prepare"
+        assert "phase" in {
+            column["name"] for column in inspect(legacy_engine).get_columns("block_votes")
+        }
+    finally:
+        legacy_engine.dispose()
 
 
 def test_rejects_duplicate_validator_votes(db, validator_keys):
@@ -467,7 +653,7 @@ def test_byzantine_keeps_transactions_and_forges_consensus_signatures(
             "block_data": block,
             "signature": proposal["proposer_sign"],
         })
-        assert db.get(PendingTransaction, transaction["tx_id"]).status == "pending"
+        assert db.get(PendingTransaction, transaction["trans_id"]).status == "pending"
     finally:
         simbehaviour_service.set_mode(simbehaviour_service.HEALTHY)
 
@@ -546,9 +732,13 @@ def test_equivocation_scenario_requires_two_pending_transactions(
 def test_proposal_contains_at_most_500_transactions(db):
     db.add_all(
         PendingTransaction(
-            tx_id=f"tx-{index:04}",
+            trans_id=f"tx-{index:04}",
             transaction_json=json.dumps(
-                {"tx_id": f"tx-{index:04}", "tx_type": "inbound"}
+                {
+                    "trans_id": f"tx-{index:04}",
+                    "quantity": 1,
+                    "item_id": "item-1",
+                }
             ),
             status="pending",
         )

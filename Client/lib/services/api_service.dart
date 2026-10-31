@@ -41,7 +41,7 @@ class ApiService {
     final uri = Uri.parse(normalized);
 
     if (uri.scheme.isEmpty || uri.host.isEmpty) {
-      throw ArgumentError('API_BASE_URL non valido: "$rawUrl"');
+      throw ArgumentError('Invalid API_BASE_URL: "$rawUrl"');
     }
 
     return normalized;
@@ -81,7 +81,7 @@ class ApiService {
 
   String _extractErrorMessage(Map<String, dynamic> body) {
     final Map<String, dynamic>? error = body['error'] as Map<String, dynamic>?;
-    final String message = error?['message']?.toString() ?? 'Errore del server';
+    final String message = error?['message']?.toString() ?? 'Server error';
     final Map<String, dynamic>? details =
         error?['details'] as Map<String, dynamic>?;
     final String? reason = details?['reason']?.toString();
@@ -120,27 +120,27 @@ class ApiService {
             body['error'] as Map<String, dynamic>?;
         final String? code = error?['code']?.toString();
         final String message =
-            error?['message']?.toString() ?? 'Accesso non autorizzato';
+            error?['message']?.toString() ?? 'Unauthorized access';
 
         if (code == 'INVALID_CREDENTIALS') {
-          return ApiResponse.error('Credenziali errate');
+          return ApiResponse.error('Invalid credentials');
         }
         if (code == 'APP_AUTH_REQUIRED') {
-          return ApiResponse.error('Token applicazione non valido o mancante');
+          return ApiResponse.error('Invalid or missing application token');
         }
-        return ApiResponse.error('Accesso rifiutato: $message');
+        return ApiResponse.error('Access denied: $message');
       } else {
         final String message =
             body['error']?['message']?.toString() ??
-            'Errore del server: ${response.statusCode}';
+            'Server error: ${response.statusCode}';
         return ApiResponse.error(message);
       }
     } on SocketException {
       return ApiResponse.error(
-        'Server di autenticazione non raggiungibile al $_baseUrl',
+        'Authentication server is unreachable at $_baseUrl',
       );
     } catch (e) {
-      return ApiResponse.error('Si è verificato un errore imprevisto: $e');
+      return ApiResponse.error('An unexpected error occurred: $e');
     }
   }
 
@@ -285,14 +285,14 @@ class ApiService {
 
       final String message =
           body['error']?['message']?.toString() ??
-          'Errore del server: ${response.statusCode}';
+          'Server error: ${response.statusCode}';
       return ApiResponse.error(message);
     } on SocketException {
       return ApiResponse.error(
-        'Server blockchain non raggiungibile al $_baseUrl',
+        'Blockchain server is unreachable at $_baseUrl',
       );
     } catch (e) {
-      return ApiResponse.error('Si è verificato un errore imprevisto: $e');
+      return ApiResponse.error('An unexpected error occurred: $e');
     }
   }
 
@@ -325,14 +325,14 @@ class ApiService {
 
       return ApiResponse.error(
         body['error']?['message']?.toString() ??
-            'Errore del server: ${response.statusCode}',
+            'Server error: ${response.statusCode}',
       );
     } on SocketException {
       return ApiResponse.error(
-        'Server blockchain non raggiungibile al $_baseUrl',
+        'Blockchain server is unreachable at $_baseUrl',
       );
     } catch (e) {
-      return ApiResponse.error('Si è verificato un errore imprevisto: $e');
+      return ApiResponse.error('An unexpected error occurred: $e');
     }
   }
 
@@ -366,14 +366,14 @@ class ApiService {
 
       final String message =
           body['error']?['message']?.toString() ??
-          'Errore del server: ${response.statusCode}';
+          'Server error: ${response.statusCode}';
       return ApiResponse.error(message);
     } on SocketException {
       return ApiResponse.error(
-        'Server blockchain non raggiungibile al $_baseUrl',
+        'Blockchain server is unreachable at $_baseUrl',
       );
     } catch (e) {
-      return ApiResponse.error('Si è verificato un errore imprevisto: $e');
+      return ApiResponse.error('An unexpected error occurred: $e');
     }
   }
 
@@ -408,14 +408,14 @@ class ApiService {
       return ApiResponse.error(
         _extractErrorMessage(body).isNotEmpty
             ? _extractErrorMessage(body)
-            : 'Errore del server: ${response.statusCode}',
+            : 'Server error: ${response.statusCode}',
       );
     } on SocketException {
       return ApiResponse.error(
-        'Server blockchain non raggiungibile al $_baseUrl',
+        'Blockchain server is unreachable at $_baseUrl',
       );
     } catch (e) {
-      return ApiResponse.error('Si è verificato un errore imprevisto: $e');
+      return ApiResponse.error('An unexpected error occurred: $e');
     }
   }
 

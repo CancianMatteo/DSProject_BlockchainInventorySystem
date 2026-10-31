@@ -16,13 +16,13 @@ defmodule InventoryNode.Application do
       end
 
     children = [
-      # Motore di consenso BFT-PoA
+      # PoA-BFT consensus engine.
       InventoryNode.ConsensusEngine,
 
-      # Ascolta gli altri nodi Elixir in Erlang Binary (packet: 4 framing)
+      # Listen for other Elixir nodes using Erlang Binary framing (packet: 4).
       {InventoryNode.ClusterListener, cluster_port},
 
-      # HTTP listener per il backend Python
+      # HTTP listener for the Python backend.
       {InventoryNode.HTTPListener, []}
     ]
 

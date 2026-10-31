@@ -25,9 +25,9 @@ defmodule InventoryNode.PythonClient do
   Returns `{:ok, map}` on success, `{:error, reason}` otherwise.
   """
   def call(payload, python_host, python_port) do
-    # httpc richiede l'URL come charlist e, per i POST, content-type e body
-    # inseriti nella tupla di richiesta (il Body come 4° argomento è ignorato
-    # e produce :invalid_request su OTP recenti).
+    # httpc requires a charlist URL and, for POST requests, the content type
+    # and body must be included in the request tuple (a fourth Body argument
+    # is ignored and causes :invalid_request on recent OTP versions).
 
     url = (python_url(python_host, python_port) <> "/python_call") |> to_charlist()
 

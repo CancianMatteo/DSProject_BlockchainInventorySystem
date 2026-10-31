@@ -55,7 +55,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       case 'security':
         return 'Security';
       case 'inventory':
-        return 'Transazione';
+        return 'Transaction';
       default:
         return category;
     }
@@ -64,21 +64,21 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   String _buildSubtitle(Map<String, dynamic> details) {
     final event = details['event']?.toString() ?? '';
     if (event == 'CHAIN_ITEM_ADDITION' || event == 'CHAIN_ITEM_REMOVAL') {
-      final author = details['author_email']?.toString() ?? 'utente';
+      final author = details['author_email']?.toString() ?? 'user';
       final item = details['item_name']?.toString() ?? 'item';
       final delta = details['delta']?.toString() ?? '?';
       final nBlock = details['n_block']?.toString() ?? '?';
-      return '$author • $item ($delta) • Blocco #$nBlock';
+      return '$author • $item ($delta) • Block #$nBlock';
     }
     if (event == 'LOW_STOCK_AFTER_DECREASE') {
       final item = details['item_name']?.toString() ?? 'item';
       final qty = details['quantity']?.toString() ?? '?';
       final nBlock = details['n_block']?.toString() ?? '?';
-      return '$item sotto soglia (qty $qty) • Blocco #$nBlock';
+      return '$item below threshold (qty $qty) • Block #$nBlock';
     }
     if (event == 'OTP_RESET_EMAIL_SENT') {
-      final target = details['target_email']?.toString() ?? 'email sconosciuta';
-      return 'Inviata email OTP reset a $target';
+      final target = details['target_email']?.toString() ?? 'unknown email';
+      return 'Password-reset OTP email sent to $target';
     }
     return details.toString();
   }
@@ -88,7 +88,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'Notifiche',
+          'Notifications',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 32),
         ),
         centerTitle: false,
@@ -100,13 +100,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
                   content: Text(
-                    'Tutte le notifiche sono state segnate come lette (grigie).',
+                    'All notifications have been marked as read.',
                   ),
                   duration: Duration(seconds: 2),
                 ),
               );
             },
-            tooltip: 'Segna tutto come letto',
+            tooltip: 'Mark all as read',
           ),
         ],
       ),
@@ -116,7 +116,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           if (notifications.isEmpty) {
             return const Center(
               child: Text(
-                'Nessuna notifica.',
+                'No notifications.',
                 style: TextStyle(fontSize: 18, color: Colors.grey),
               ),
             );
@@ -174,7 +174,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        timeago.format(notification.timestamp, locale: 'it'),
+                        timeago.format(notification.timestamp, locale: 'en'),
                         style: TextStyle(fontSize: 12, color: Colors.grey[500]),
                       ),
                     ],

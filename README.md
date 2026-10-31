@@ -74,18 +74,24 @@ why that attempt cannot break the consensus rules:
 - `equivocation`: if node D is proposer, it sends different, validly signed
   block proposals to separate groups of peers. This needs at least two pending
   transactions. Each honest node votes for at most one proposal for that
-  height and round; conflicting signed proposals expose the equivocation and
-  can trigger a round change. D cannot get both conflicting blocks committed.
+  height and round. A valid conflict proof received before a node starts
+  COMMIT makes it stop voting for that round and relay the proof. If a node has
+  already started COMMIT and the main block reaches quorum, it persists the
+  COMMIT signatures and sends the finalized block with that certificate to
+  peers. A peer holding the alternate proposal verifies the COMMIT quorum and
+  imports the committed block; the PREPARE certificate alone is not used for
+  this recovery. The proof does not undo a block already committed, and D
+  cannot get both conflicting blocks committed.
 - `leader_offline`: node D sends its proposal, then withholds the commit
   proposal and its ROUND_CHANGE message. The honest validators time out,
   exchange their own ROUND_CHANGE votes, and select a new proposer after
   reaching quorum.
 
-Set the scenario, then start or recreate node D's services so the setting is
-loaded:
+For an already configured local Compose cluster, set the scenario for node D
+and recreate its containers. This command does not delete database volumes:
 
 ```bash
-docker compose up -d --build --force-recreate python_validator_d node_d
+BIZANTINE_SCENARIO=equivocation docker compose up -d --force-recreate python_validator_d node_d
 ```
 
 Enable the Byzantine mode on node D:
@@ -94,24 +100,73 @@ Enable the Byzantine mode on node D:
 curl -X POST http://localhost:8004/api/v1/simbehaviour/bizantine
 ```
 
-Submit valid transactions as usual through the application. Byzantine mode
-does not block transaction forwarding; it changes only node D's consensus
-messages. The blockchain needs pending transactions to create a block. It
-proposes when 500 are waiting, or after 15 minutes with at least one pending
-transaction.
-
-Open [http://localhost:8001/api/v1/chain/history](http://localhost:8001/api/v1/chain/history)
-in a browser to monitor the blockchain. Refresh the page to see new blocks;
-the newest block appears first. You can also check it with:
+Verify that all backends are ready and node D reports Byzantine mode:
 
 ```bash
-curl http://localhost:8001/api/v1/chain/history
+for port in 8001 8002 8003 8004; do
+  curl -fsS "http://localhost:${port}/api/v1/health/ready"
+  echo
+done
+curl -fsS http://localhost:8004/api/v1/simbehaviour
 ```
 
-Honest nodes reject invalid signatures and conflicting proposals. For
-`leader_offline`, they should change round after the timeout. With one
-Byzantine validator, the three honest validators can still reach quorum and
-commit blocks, so the history should continue to grow when proposals succeed.
+Byzantine mode does not block transaction forwarding; it changes only node D's
+consensus messages. Use the included load-test script to submit signed test
+transactions through node A:
+
+```bash
+docker compose exec -T python_validator_a python /app/load_test.py \
+  --count 2000 --delay 0.01 --timeout 900
+```
+
+The test inserts real transactions and blocks into the persistent databases.
+Do not run it against production data. Each block contains at most 500
+transactions. If there are fewer than 500 pending transactions when the
+15-minute idle trigger fires (for example, because the latest existing block
+is already older than 15 minutes), a smaller block may be proposed and the
+script can wait for the remaining transactions. In that case run the same
+command again with a small additional `--count` (for example, `--count 49`)
+to reach the next block threshold, or wait for the idle trigger.
+
+The equivocation branch runs only when node D is the expected proposer:
+validators are sorted as `node_a`, `node_b`, `node_c`, `node_d`, and D proposes
+when `(height + round) mod 4 = 3`. The normal proposal is triggered by pending
+transactions; the 8-second round timeout advances the round and proposer.
+The load test may therefore commit ordinary blocks before it reaches a D-led
+round. Keep the following log view open to observe the conflict proof, a node
+rejecting COMMIT after seeing that proof, and certificate-based recovery:
+
+```bash
+docker compose logs -f node_a node_b node_c node_d
+```
+
+Look for messages such as `Prova di equivocation valida`, `Voto COMMIT
+ignorato dopo la prova di equivocation`, and `importato con certificato
+COMMIT`. To monitor the persisted chain, open these URLs in a browser and
+refresh them, or query them with `curl`:
+
+```text
+http://localhost:8001/api/v1/chain/history
+http://localhost:8002/api/v1/chain/history
+http://localhost:8003/api/v1/chain/history
+http://localhost:8004/api/v1/chain/history
+```
+
+```bash
+for port in 8001 8002 8003 8004; do
+  echo "Validator API on port ${port}:"
+  curl -fsS "http://localhost:${port}/api/v1/chain/history?limit=1"
+  echo
+done
+```
+
+The newest block is first. Compare its `n_block` and `block_hash` across all
+four responses to check convergence; its `votes` should include three
+distinct entries with `"phase":"commit"`. At height 6 in the observed
+end-to-end run, node C received the equivocation proof before COMMIT, rejected
+the conflicting votes, and imported the finalized main block using the COMMIT
+certificate. With one Byzantine validator, three honest validators can still
+reach quorum and the chain can continue growing.
 
 When the test is finished, restore normal behaviour:
 

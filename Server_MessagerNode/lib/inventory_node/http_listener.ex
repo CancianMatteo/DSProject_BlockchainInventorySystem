@@ -52,7 +52,7 @@ defmodule InventoryNode.HTTPListener do
           :gen_tcp.listen(port, [:binary, packet: :raw, active: false, reuseaddr: true])
 
         Logger.info(
-          "HTTP Listener (Elixir) in ascolto su http://0.0.0.0:#{port} (per il backend Python)"
+          "HTTP Listener (Elixir) listening at http://0.0.0.0:#{port} (for the Python backend)."
         )
 
         loop_acceptor(socket)
@@ -108,10 +108,10 @@ defmodule InventoryNode.HTTPListener do
 
   # ---- HTTP plumbing ----
   #
-  # Un client può inviare riga di richiesta, intestazioni e corpo in un unico
-  # segmento TCP: il buffer viene accumulato fino al marcatore "\r\n\r\n" e
-  # poi splittato, anziché assumere che il primo recv restituisca solo la
-  # riga di richiesta (il che produceva :bad_request su ogni richiesta).
+  # A client may send the request line, headers, and body in one TCP segment.
+  # Accumulate data until "\r\n\r\n" and then split it instead of assuming the
+  # first recv contains only the request line (which caused :bad_request for
+  # every request).
 
   @head_terminator "\r\n\r\n"
 
@@ -173,7 +173,7 @@ defmodule InventoryNode.HTTPListener do
   defp parse_headers(lines) do
     Enum.reduce(lines, %{}, fn line, headers ->
       case String.split(line, ":", parts: 2) do
-        # I nomi delle intestazioni HTTP non distinguono le maiuscole.
+        # HTTP header names are case-insensitive.
         [key, value] -> Map.put(headers, String.downcase(String.trim(key)), String.trim(value))
         _ -> headers
       end
@@ -218,7 +218,7 @@ defmodule InventoryNode.HTTPListener do
 
   # dispatch/3 returns {status, reason, json_body}; serve/1 serialises it.
 
-  # Imposta lo stato di comportamento simulato del nodo (vedi InventoryNode.SimBehaviour).
+  # Set the node's simulated behavior state (see InventoryNode.SimBehaviour).
   defp dispatch("/api/v1/simbehaviour", _headers, body) do
     case JSON.decode(body) do
       {:ok, %{"mode" => mode}} when is_binary(mode) ->

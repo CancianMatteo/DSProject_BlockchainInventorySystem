@@ -108,7 +108,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (email == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Utente non trovato. Effettua nuovamente il login.'),
+          content: Text('User not found. Please sign in again.'),
           backgroundColor: Colors.red,
         ),
       );
@@ -130,7 +130,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'Profilo',
+          'Profile',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 32),
         ),
         actions: [
@@ -143,27 +143,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ],
       ),
       body: user == null
-          ? const Center(child: Text('Nessun utente loggato.'))
+          ? const Center(child: Text('No user is signed in.'))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Dati utente',
+                    'User details',
                     style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 12),
                   _buildInfoCard(
                     child: Column(
                       children: [
-                        _buildStatsRow(label: 'Nome', value: user.name),
+                        _buildStatsRow(label: 'First name', value: user.name),
                         const Divider(),
-                        _buildStatsRow(label: 'Cognome', value: user.surname),
+                        _buildStatsRow(label: 'Last name', value: user.surname),
                         const Divider(),
                         _buildStatsRow(label: 'Email', value: user.email),
                         const Divider(),
-                        _buildStatsRow(label: 'Ruolo', value: user.role),
+                        _buildStatsRow(label: 'Role', value: user.role),
                       ],
                     ),
                   ),
@@ -174,7 +174,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: ElevatedButton.icon(
                         icon: const Icon(Icons.lock_outline),
                         onPressed: () => _showChangePasswordDialog(context),
-                        label: const Text('Cambia password'),
+                        label: const Text('Change password'),
                       ),
                     ),
                   ),
@@ -201,14 +201,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             const Text(
-                              'Statistiche',
+                              'Statistics',
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
                             IconButton(
-                              tooltip: 'Aggiorna statistiche',
+                              tooltip: 'Refresh statistics',
                               onPressed: _isLoadingStats ? null : _loadStats,
                               icon: const Icon(Icons.refresh),
                             ),
@@ -223,30 +223,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           Column(
                             children: [
                               _buildDoubleStatRow(
-                                leftLabel: 'Tot categorie',
+                                leftLabel: 'Total categories',
                                 leftValue: _stats.totalCategories.toString(),
-                                rightLabel: 'Tot articoli',
+                                rightLabel: 'Total items',
                                 rightValue: _stats.totalItems.toString(),
                               ),
                               const Divider(height: 16),
                               _buildDoubleStatRow(
-                                leftLabel: 'Modifiche tue',
+                                leftLabel: 'Your changes',
                                 leftValue: _stats.userChanges.toString(),
-                                rightLabel: 'Modifiche tot',
+                                rightLabel: 'Total changes',
                                 rightValue: _stats.totalChanges.toString(),
                               ),
                               const Divider(height: 16),
                               _buildDoubleStatRow(
-                                leftLabel: 'Aggiunte tue',
+                                leftLabel: 'Your additions',
                                 leftValue: _stats.userAdditions.toString(),
-                                rightLabel: 'Aggiunte tot',
+                                rightLabel: 'Total additions',
                                 rightValue: _stats.totalAdditions.toString(),
                               ),
                               const Divider(height: 16),
                               _buildDoubleStatRow(
-                                leftLabel: 'Rimozioni tue',
+                                leftLabel: 'Your removals',
                                 leftValue: _stats.userRemovals.toString(),
-                                rightLabel: 'Rimozioni tot',
+                                rightLabel: 'Total removals',
                                 rightValue: _stats.totalRemovals.toString(),
                               ),
                             ],
@@ -398,14 +398,14 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Password modificata con successo!'),
+          content: Text('Password changed successfully!'),
           backgroundColor: Colors.green,
         ),
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Errore: ${response.errorMessage}'),
+          content: Text('Error: ${response.errorMessage}'),
           backgroundColor: Colors.red,
         ),
       );
@@ -415,7 +415,7 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Cambia Password'),
+      title: const Text('Change password'),
       content: Form(
         key: _formKey,
         child: SingleChildScrollView(
@@ -425,24 +425,24 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
               TextFormField(
                 controller: _oldPasswordController,
                 decoration: const InputDecoration(
-                  labelText: 'Vecchia Password',
+                  labelText: 'Current password',
                 ),
                 obscureText: true,
                 validator: (value) => value == null || value.isEmpty
-                    ? 'Campo obbligatorio'
+                    ? 'This field is required'
                     : null,
               ),
               const SizedBox(height: 16),
               TextFormField(
                 controller: _newPasswordController,
-                decoration: const InputDecoration(labelText: 'Nuova Password'),
+                decoration: const InputDecoration(labelText: 'New password'),
                 obscureText: true,
                 validator: (value) {
                   if (value == null || value.isEmpty) {
-                    return 'Campo obbligatorio';
+                    return 'This field is required';
                   }
                   if (value.length < 8) {
-                    return 'La password deve contenere almeno 8 caratteri';
+                    return 'Password must be at least 8 characters long';
                   }
                   return null;
                 },
@@ -451,12 +451,12 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
               TextFormField(
                 controller: _confirmPasswordController,
                 decoration: const InputDecoration(
-                  labelText: 'Conferma Nuova Password',
+                  labelText: 'Confirm new password',
                 ),
                 obscureText: true,
                 validator: (value) {
                   if (value != _newPasswordController.text) {
-                    return 'Le password non coincidono';
+                    return 'Passwords do not match';
                   }
                   return null;
                 },
@@ -468,7 +468,7 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
       actions: [
         TextButton(
           onPressed: _isLoading ? null : () => Navigator.of(context).pop(),
-          child: const Text('Annulla'),
+          child: const Text('Cancel'),
         ),
         ElevatedButton(
           onPressed: _isLoading ? null : _submit,
@@ -478,7 +478,7 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
                   height: 20,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Text('Conferma'),
+              : const Text('Confirm'),
         ),
       ],
     );

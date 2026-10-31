@@ -22,7 +22,7 @@ class ApiResponse<T> {
       data: parsedData,
       errorMessage: isOk
           ? null
-          : json['error']?['message'] ?? 'Errore sconosciuto',
+          : json['error']?['message'] ?? 'Unknown error',
     );
   }
 

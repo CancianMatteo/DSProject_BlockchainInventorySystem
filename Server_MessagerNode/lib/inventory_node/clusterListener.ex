@@ -8,7 +8,7 @@ defmodule InventoryNode.ClusterListener do
 
   def listen(port) do
     {:ok, socket} = :gen_tcp.listen(port, [:binary, packet: 4, active: false, reuseaddr: true])
-    Logger.info("Cluster Listener (Erlang) in ascolto sulla porta #{port}")
+    Logger.info("Cluster Listener (Erlang) listening on port #{port}.")
 
     loop_acceptor(socket)
   end
@@ -21,7 +21,7 @@ defmodule InventoryNode.ClusterListener do
   end
 
   defp serve(client) do
-    # Modalità noresponse: la connessione viene accettata ma non processata.
+    # In noresponse mode, connections are accepted but not processed.
     if InventoryNode.SimBehaviour.get() == :noresponse do
       :gen_tcp.close(client)
       :ok

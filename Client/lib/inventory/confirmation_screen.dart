@@ -44,7 +44,7 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Riepilogo Modifiche'),
+        title: const Text('Changes summary'),
         centerTitle: true,
       ),
       body: Column(
@@ -152,14 +152,14 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
                   child: OutlinedButton(
                     onPressed: () => Navigator.of(
                       context,
-                    ).pop(false), // Pop with a failure result
+                    ).pop(false), // Return a cancellation result.
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
                     ),
-                    child: const Text('ANNULLA'),
+                    child: const Text('CANCEL'),
                   ),
                 ),
                 const SizedBox(width: 16),
@@ -174,7 +174,7 @@ class _ConfirmationScreenState extends State<ConfirmationScreen> {
                         borderRadius: BorderRadius.circular(12),
                       ),
                     ),
-                    child: const Text('CONFERMA'),
+                    child: const Text('CONFIRM'),
                   ),
                 ),
               ],

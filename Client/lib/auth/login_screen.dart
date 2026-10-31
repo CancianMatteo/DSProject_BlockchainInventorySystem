@@ -59,13 +59,13 @@ class _LoginScreenState extends State<LoginScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const Text(
-                    'Bentornato',
+                    'Welcome back',
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Accedi al tuo inventario blockchain.',
+                    'Sign in to your blockchain inventory.',
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 16, color: Colors.grey[600]),
                   ),
@@ -84,7 +84,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       if (value == null ||
                           value.isEmpty ||
                           !value.contains('@')) {
-                        return 'Inserisci un\'email valida';
+                        return 'Enter a valid email address';
                       }
                       return null;
                     },
@@ -114,7 +114,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                     validator: (value) {
                       if (value == null || value.isEmpty) {
-                        return 'Inserisci la password';
+                        return 'Enter your password';
                       }
                       return null;
                     },
@@ -140,7 +140,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           )
                         : const Text(
-                            'ACCEDI',
+                            'SIGN IN',
                             style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
@@ -153,7 +153,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       context.go('/login/forgot-password');
                     },
                     child: Text(
-                      'Password dimenticata?',
+                      'Forgot password?',
                       style: TextStyle(color: Colors.grey[600]),
                     ),
                   ),

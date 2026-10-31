@@ -76,7 +76,7 @@ class _ChainLogScreenState extends State<ChainLogScreen> {
       if (!mounted) return;
       setState(() {
         final message =
-            response.errorMessage ?? 'Errore caricamento transazioni';
+            response.errorMessage ?? 'Failed to load transactions';
         if (isFirstPage) {
           _isLoading = false;
           _error = message;
@@ -123,19 +123,19 @@ class _ChainLogScreenState extends State<ChainLogScreen> {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: const Text('Cerca Transazione'),
+          title: const Text('Search transactions'),
           content: TextField(
             controller: _searchController,
-            decoration: const InputDecoration(hintText: "Autore o oggetto..."),
+            decoration: const InputDecoration(hintText: "Author or item..."),
             autofocus: true,
           ),
           actions: <Widget>[
             TextButton(
-              child: const Text('Annulla'),
+              child: const Text('Cancel'),
               onPressed: () => Navigator.of(context).pop(),
             ),
             TextButton(
-              child: const Text('Cerca'),
+              child: const Text('Search'),
               onPressed: () {
                 setState(() {
                   _searchQuery = _searchController.text.isEmpty
@@ -155,19 +155,19 @@ class _ChainLogScreenState extends State<ChainLogScreen> {
     final now = DateTime.now();
     final difference = now.difference(timestamp);
     if (difference.inDays > 0) {
-      return '${difference.inDays}g fa';
+      return '${difference.inDays}d ago';
     }
     if (difference.inHours > 0) {
-      return '${difference.inHours}h fa';
+      return '${difference.inHours}h ago';
     }
     if (difference.inMinutes > 0) {
-      return '${difference.inMinutes}min fa';
+      return '${difference.inMinutes}m ago';
     }
-    return 'Poco fa';
+    return 'Just now';
   }
 
   String _buildSummary(Block block) {
-    if (block.changes.isEmpty) return 'Nessuna modifica';
+    if (block.changes.isEmpty) return 'No changes';
     final parts = <String>[];
     block.changes.forEach((itemId, delta) {
       final item = block.itemCatalog[itemId] as Map<String, dynamic>?;
@@ -191,13 +191,13 @@ class _ChainLogScreenState extends State<ChainLogScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Storico Transazioni'),
+        title: const Text('Transaction history'),
         centerTitle: true,
         actions: [
           IconButton(
             icon: const Icon(Icons.search),
             onPressed: _showSearchDialog,
-            tooltip: 'Cerca',
+            tooltip: 'Search',
           ),
         ],
       ),
@@ -221,7 +221,7 @@ class _ChainLogScreenState extends State<ChainLogScreen> {
                     if (_loadMoreError != null) {
                       return TextButton(
                         onPressed: _loadBlocks,
-                        child: Text('Riprova: $_loadMoreError'),
+                        child: Text('Retry: $_loadMoreError'),
                       );
                     }
                     if (_isLoadingMore) {
@@ -233,7 +233,7 @@ class _ChainLogScreenState extends State<ChainLogScreen> {
                     return _hasMore
                         ? TextButton(
                             onPressed: _loadBlocks,
-                            child: const Text('Carica blocchi precedenti'),
+                            child: const Text('Load previous blocks'),
                           )
                         : const SizedBox.shrink();
                   }
@@ -249,7 +249,7 @@ class _ChainLogScreenState extends State<ChainLogScreen> {
                         vertical: 10,
                       ),
                       title: Text(
-                        'Blocco #${block.nBlock}',
+                        'Block #${block.nBlock}',
                         style: const TextStyle(
                           fontWeight: FontWeight.w700,
                           color: Colors.black,

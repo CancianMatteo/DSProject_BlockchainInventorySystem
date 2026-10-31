@@ -28,9 +28,9 @@ defmodule InventoryNode.Router do
   end
 
   defp parse_peers(peers_env) do
-    # Formati supportati: "id@host:port" (host diverso dall'id, deploy
-    # multi-VPS con IP pubblici) e "host:port" (l'id coincide con l'host,
-    # come nelle docker-compose locali).
+    # Supported formats: "id@host:port" (host differs from the ID, for
+    # multi-VPS deployments with public IPs) and "host:port" (the ID matches
+    # the host, as in local Docker Compose deployments).
     (peers_env || "")
     |> String.split(",", trim: true)
     |> Enum.into(%{}, fn peer ->
@@ -51,7 +51,7 @@ defmodule InventoryNode.Router do
   # ---------------------------------------------------------------------------
 
   def handle_payload(payload) do
-    # Modalità noresponse: il nodo non risponde a nessuno.
+    # In noresponse mode, this node does not respond to any peer.
     case InventoryNode.SimBehaviour.get() do
       :noresponse -> :ok
       mode -> do_handle_payload(payload, mode)
@@ -71,8 +71,8 @@ defmodule InventoryNode.Router do
       # TRANSACTION OPERATION
       %{"flag" => "transaction"} = transaction ->
         IO.puts(
-          "Richiesta di transazione: #{Map.get(transaction, "quantity")} unità " <>
-            "dell'oggetto #{Map.get(transaction, "item_id")} nel magazzino " <>
+          "Transaction request: #{Map.get(transaction, "quantity")} units " <>
+            "of item #{Map.get(transaction, "item_id")} at location " <>
             "#{Map.get(transaction, "location")}"
         )
 
@@ -83,18 +83,21 @@ defmodule InventoryNode.Router do
         case result do
           {:ok, tx} ->
             my_id = node_id()
-            # relay_node non è firmato e viene rimosso prima dell'invio a Python.
+            # relay_node is unsigned and is removed before sending the request to Python.
             if tx["duplicate"] != true and relay_node not in Map.keys(peers) do
               broadcast_to_peers(peers, Map.put(python_transaction, "relay_node", my_id))
             end
 
           {:error, reason} ->
-            Logger.error("Invio transazione a Python fallito: #{inspect(reason)}")
+            Logger.error("Failed to forward transaction to Python: #{inspect(reason)}")
         end
 
       # ROUND CHANGE OPERATION
       {:round_change, round_payload} ->
         GenServer.cast(InventoryNode.ConsensusEngine, {:round_change, round_payload})
+
+      {:finalized_block, package} ->
+        GenServer.cast(InventoryNode.ConsensusEngine, {:finalized_block, package})
 
       # CONSENSUS OPERATIONS
       {:pre_prepare, height, round, proposer_id, block_data, signature} ->
@@ -126,11 +129,11 @@ defmodule InventoryNode.Router do
 
       # CATCH ALL
       other ->
-        IO.puts("Payload non riconosciuto: #{inspect(other)}")
+        IO.puts("Unrecognized payload: #{inspect(other)}")
     end
   end
 
-  # Funzioni di supporto
+  # Helpers.
 
   defp send_to_python_service(payload, py_host, py_port) do
     InventoryNode.PythonClient.call(payload, py_host, py_port)
@@ -139,7 +142,7 @@ defmodule InventoryNode.Router do
   defp broadcast_to_peers(peers, message) do
     case InventoryNode.SimBehaviour.get() do
       :noresponse ->
-        # Modalità noresponse: il nodo non parla con nessuno.
+        # In noresponse mode, this node does not communicate with peers.
         :ok
 
       :bizantine ->
@@ -163,7 +166,7 @@ defmodule InventoryNode.Router do
   defp send_tcp(peer_id, host, port, binary_data) do
     case :gen_tcp.connect(host, port, [:binary, active: false], 1000) do
       {:ok, socket} ->
-        # Il ClusterListener riceve con `packet: 4`: prepone il header di lunghezza.
+        # The ClusterListener uses `packet: 4` and prepends the length header.
         framed = <<byte_size(binary_data)::32-big, binary_data::binary>>
         result = :gen_tcp.send(socket, framed)
         :gen_tcp.close(socket)
@@ -173,11 +176,11 @@ defmodule InventoryNode.Router do
             :ok
 
           {:error, reason} ->
-            Logger.warning("Invio del messaggio al peer #{peer_id} fallito: #{inspect(reason)}")
+            Logger.warning("Failed to send message to peer #{peer_id}: #{inspect(reason)}")
         end
 
       {:error, reason} ->
-        Logger.warning("Connessione al peer #{peer_id} fallita: #{inspect(reason)}")
+        Logger.warning("Failed to connect to peer #{peer_id}: #{inspect(reason)}")
     end
   end
 end

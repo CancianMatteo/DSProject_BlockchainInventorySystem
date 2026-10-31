@@ -6,7 +6,8 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import httpx
-from sqlalchemy.exc import SQLAlchemyError, inspect, text
+from sqlalchemy import inspect, text
+from sqlalchemy.exc import SQLAlchemyError
 from app.api.routes_auth import router as auth_router
 from app.api.routes_chain import router as chain_router
 from app.api.routes_health import router as health_router
@@ -27,19 +28,19 @@ from app.services import proposal_trigger_service
 logger = logging.getLogger(__name__)
 
 
-# Paths (relative to the API prefix) that stay reachable while a fault is
-# injected. SimBehaviour itself must always stay reachable so a test can move
-# the node back to ``healthy``; health probes stay reachable so the
-# deploy script / load balancer can still observe the process.
+# Paths (relative to the API prefix) that remain reachable while a fault is
+# injected. SimBehaviour must always remain available so tests can return the
+# node to ``healthy``; health probes remain available so the deploy script or
+# load balancer can still monitor the process.
 _ALWAYS_ALLOWED_PREFIXES = (
     "/simbehaviour",
     "/health/live",
     "/health/ready",
 )
 
-# Intra-cluster traffic (Elixir consensus engine -> Python) that must keep
-# working in ``noclients`` mode: the node still approves transactions and
-# votes on blocks, it only ignores clients.
+# Intra-cluster traffic (Elixir consensus engine -> Python) must keep working
+# in ``noclients`` mode: the node still approves transactions and votes on
+# blocks; it only ignores client requests.
 _NODE_TO_NODE_PREFIXES = (
     "/python_call",
 )
@@ -58,7 +59,7 @@ def _poll_proposal_trigger() -> None:
     with SessionLocal() as db:
         result = proposal_trigger_service.request_proposal_if_ready(db)
         if result is not None and result["accepted"]:
-            logger.info("Elixir ha accettato la richiesta di proposta: %s", result)
+            logger.info("Elixir accepted the proposal request: %s", result)
 
 
 async def _proposal_trigger_loop() -> None:
@@ -67,7 +68,7 @@ async def _proposal_trigger_loop() -> None:
         try:
             await asyncio.to_thread(_poll_proposal_trigger)
         except (SQLAlchemyError, ValueError, httpx.HTTPError, AppError) as exc:
-            logger.warning("Controllo trigger proposta non riuscito: %s", exc)
+            logger.warning("Proposal-trigger check failed: %s", exc)
 
 
 @asynccontextmanager
@@ -75,6 +76,7 @@ async def lifespan(_: FastAPI):
     configure_logging()
     _migrate_transaction_identifier()
     Base.metadata.create_all(bind=engine)
+    _migrate_block_vote_phase()
 
     db = SessionLocal()
     try:
@@ -111,6 +113,21 @@ def _migrate_transaction_identifier() -> None:
         with engine.begin() as connection:
             connection.execute(
                 text("ALTER TABLE pending_transactions RENAME COLUMN tx_id TO trans_id")
+            )
+
+
+def _migrate_block_vote_phase() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("block_votes"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("block_votes")}
+    if "phase" not in columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE block_votes "
+                    "ADD COLUMN phase VARCHAR(16) NOT NULL DEFAULT 'prepare'"
+                )
             )
 
 

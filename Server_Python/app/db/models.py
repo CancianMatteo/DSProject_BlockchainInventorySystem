@@ -71,6 +71,7 @@ class BlockVote(Base):
     block_hash: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     validator_id: Mapped[str] = mapped_column(String(128), nullable=False)
     signature: Mapped[str] = mapped_column(Text, nullable=False)
+    phase: Mapped[str] = mapped_column(String(16), nullable=False, default="prepare")
 
 
 class RevokedToken(Base):

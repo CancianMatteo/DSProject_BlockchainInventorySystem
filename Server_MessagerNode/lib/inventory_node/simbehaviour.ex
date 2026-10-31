@@ -1,22 +1,22 @@
 defmodule InventoryNode.SimBehaviour do
   @moduledoc """
-  Stato di comportamento simulato del nodo (per test). Modalità:
+  Simulated node behavior state (for testing). Modes:
 
-    * `:healthy`    -> comportamento normale (default)
-    * `:noclients`  -> il nodo parla con gli altri nodi ma non risponde ai
-                       client (gate lato Python)
-    * `:noresponse` -> il nodo non comunica con nessuno: il ClusterListener
-                       accetta e scarta le connessioni, il Router ignora i
-                       payload e i broadcast vengono soppressi (il backend
-                       Python risponde solo agli endpoint simbehaviour)
-    * `:bizantine`  -> le transazioni valide vengono comunque salvate e
-                       inoltrate; il consenso usa lo scenario di fault
-                       injection configurato in `BIZANTINE_SCENARIO`
+    * `:healthy`    -> normal behavior (default)
+    * `:noclients`  -> the node communicates with peers but does not respond to
+                       clients (gated by Python)
+    * `:noresponse` -> the node does not communicate with peers: ClusterListener
+                       accepts and discards connections, Router ignores
+                       payloads, and broadcasts are suppressed (the Python
+                       backend responds only to simbehaviour endpoints)
+    * `:bizantine`  -> valid transactions are still stored and forwarded;
+                       consensus uses the fault-injection scenario configured
+                       in `BIZANTINE_SCENARIO`
 
-  Lo stato è condiviso tra motore Elixir e backend Python: l'endpoint Python
-  `POST /api/v1/simbehaviour/{mode}` inoltra la richiesta a questo nodo via
-  l'HTTP listener (`POST /api/v1/simbehaviour`). Il valore è volatile e torna
-  a `healthy` al riavvio del nodo.
+  The state is shared by the Elixir engine and Python backend: the Python
+  endpoint `POST /api/v1/simbehaviour/{mode}` forwards the request to this node
+  through the HTTP listener (`POST /api/v1/simbehaviour`). The value is
+  volatile and resets to `healthy` when the node restarts.
   """
 
   @key {__MODULE__, :mode}

@@ -70,7 +70,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              "Errore durante il caricamento dell'inventario: ${response.errorMessage}",
+              "Failed to load inventory: ${response.errorMessage}",
             ),
             backgroundColor: Colors.red,
           ),
@@ -80,7 +80,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text("Errore imprevisto: $e"),
+          content: Text("Unexpected error: $e"),
           backgroundColor: Colors.red,
         ),
       );
@@ -106,7 +106,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         .toSet()
         .toList();
     categories.sort();
-    return ['Tutti', ...categories];
+    return ['All', ...categories];
   }
 
   void _updateApplyButtonState() {
@@ -123,21 +123,21 @@ class _InventoryScreenState extends State<InventoryScreen> {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: const Text('Cerca Articolo'),
+          title: const Text('Search items'),
           content: TextField(
             controller: _searchController,
             decoration: const InputDecoration(
-              hintText: "Nome dell'articolo...",
+              hintText: "Item name...",
             ),
             autofocus: true,
           ),
           actions: <Widget>[
             TextButton(
-              child: const Text('Annulla'),
+              child: const Text('Cancel'),
               onPressed: () => Navigator.of(context).pop(),
             ),
             TextButton(
-              child: const Text('Cerca'),
+              child: const Text('Search'),
               onPressed: () {
                 setState(() {
                   _searchQuery = _searchController.text.isEmpty
@@ -224,11 +224,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
           ),
           actions: <Widget>[
             TextButton(
-              child: const Text('Annulla'),
+              child: const Text('Cancel'),
               onPressed: () => Navigator.of(context).pop(),
             ),
             ElevatedButton(
-              child: const Text('Conferma'),
+              child: const Text('Confirm'),
               onPressed: () {
                 _handleQuantityChanged(item.id, currentChange);
                 Navigator.of(context).pop();
@@ -273,7 +273,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       if (sessionToken.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Sessione non valida: effettua di nuovo il login'),
+            content: Text('Invalid session. Please sign in again.'),
             backgroundColor: Colors.red,
           ),
         );
@@ -283,7 +283,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       if (_quantityChanges.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Nessuna variazione di quantita da applicare.'),
+            content: Text('There are no quantity changes to apply.'),
             backgroundColor: Colors.orange,
           ),
         );
@@ -341,7 +341,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text(
-                'Transazioni accettate, ma il blocco non e ancora stato confermato.',
+                'Transactions accepted, but the block has not been confirmed yet.',
               ),
               backgroundColor: Colors.orange,
             ),
@@ -351,7 +351,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Errore durante il salvataggio: $e'),
+            content: Text('Failed to save changes: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -363,8 +363,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
         SnackBar(
           content: Text(
             allFinalized
-                ? 'Transazioni confermate nel blocco.'
-                : 'Transazioni aggiunte al mempool.',
+                ? 'Transactions confirmed in the block.'
+                : 'Transactions added to the mempool.',
           ),
           backgroundColor: allFinalized ? Colors.green : Colors.orange,
         ),
@@ -422,14 +422,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
   AppBar _buildAppBar() {
     return AppBar(
       title: const Text(
-        'Inventario',
+        'Inventory',
         style: TextStyle(fontWeight: FontWeight.bold, fontSize: 32),
       ),
       actions: [
         IconButton(
           icon: const Icon(Icons.search),
           onPressed: _showSearchDialog,
-          tooltip: 'Cerca',
+          tooltip: 'Search',
         ),
         Padding(
           padding: const EdgeInsets.only(right: 16.0),
@@ -446,7 +446,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 borderRadius: BorderRadius.circular(8),
               ),
             ),
-            child: const Text('APPLICA'),
+            child: const Text('APPLY'),
           ),
         ),
       ],
@@ -456,7 +456,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   Widget _buildInventoryContent() {
     final filteredItems = _inventoryItems.where((item) {
       final bool categoryMatch =
-          _selectedCategory == 'Tutti' || item.category == _selectedCategory;
+          _selectedCategory == 'All' || item.category == _selectedCategory;
       final bool searchMatch =
           _searchQuery == null ||
           _searchQuery!.isEmpty ||
@@ -495,7 +495,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               IconButton(
                 icon: const Icon(Icons.qr_code_scanner),
                 onPressed: _scanBarcode,
-                tooltip: 'Scannerizza',
+                tooltip: 'Scan barcode',
               ),
             ],
           ),
@@ -517,7 +517,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     ),
                     child: OutlinedButton.icon(
                       icon: const Icon(Icons.add),
-                      label: const Text('Aggiungi Nuovo Elemento'),
+                      label: const Text('Add new item'),
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         textStyle: const TextStyle(
@@ -605,7 +605,7 @@ class _AddItemDialogState extends State<_AddItemDialog> {
     const String addNewCategoryValue = '__ADD_NEW__';
 
     return AlertDialog(
-      title: const Text('Aggiungi Nuovo Articolo'),
+      title: const Text('Add new item'),
       content: Form(
         key: _formKey,
         child: SingleChildScrollView(
@@ -614,36 +614,36 @@ class _AddItemDialogState extends State<_AddItemDialog> {
             children: [
               TextFormField(
                 controller: _nameController,
-                decoration: const InputDecoration(labelText: 'Nome Oggetto*'),
+                decoration: const InputDecoration(labelText: 'Item name*'),
                 validator: (value) =>
-                    value == null || value.isEmpty ? 'Inserisci un nome' : null,
+                    value == null || value.isEmpty ? 'Enter a name' : null,
               ),
               TextFormField(
                 controller: _brandController,
-                decoration: const InputDecoration(labelText: 'Marca*'),
+                decoration: const InputDecoration(labelText: 'Brand*'),
                 validator: (value) => value == null || value.isEmpty
-                    ? 'Inserisci una marca'
+                    ? 'Enter a brand'
                     : null,
               ),
               TextFormField(
                 controller: _typeController,
-                decoration: const InputDecoration(labelText: 'Tipo/Colore'),
+                decoration: const InputDecoration(labelText: 'Type/color'),
               ),
               TextFormField(
                 controller: _barcodeController,
                 keyboardType: TextInputType.number,
                 decoration: InputDecoration(
-                  labelText: 'Barcode(ID)',
+                  labelText: 'Barcode (ID)',
                   suffixIcon: IconButton(
                     icon: const Icon(Icons.qr_code_scanner),
-                    tooltip: 'Scansiona barcode/QR',
+                    tooltip: 'Scan barcode/QR code',
                     onPressed: _scanBarcodeIntoField,
                   ),
                 ),
               ),
               DropdownButtonFormField<String>(
                 initialValue: _selectedCategoryValue,
-                decoration: const InputDecoration(labelText: 'Categoria*'),
+                decoration: const InputDecoration(labelText: 'Category*'),
                 items: [
                   ...widget.currentCategories.map(
                     (c) => DropdownMenuItem(value: c, child: Text(c)),
@@ -660,17 +660,17 @@ class _AddItemDialogState extends State<_AddItemDialog> {
                   });
                 },
                 validator: (value) =>
-                    value == null ? 'Seleziona una categoria' : null,
+                    value == null ? 'Select a category' : null,
               ),
               if (_showNewCategoryField)
                 TextFormField(
                   controller: _newCategoryController,
                   decoration: const InputDecoration(
-                    labelText: 'Nome Nuova Categoria',
+                    labelText: 'New category name',
                   ),
                   validator: (value) =>
                       _showNewCategoryField && (value == null || value.isEmpty)
-                      ? 'Inserisci il nome della nuova categoria'
+                      ? 'Enter the new category name'
                       : null,
                 ),
             ],
@@ -680,7 +680,7 @@ class _AddItemDialogState extends State<_AddItemDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Annulla'),
+          child: const Text('Cancel'),
         ),
         ElevatedButton(
           onPressed: () {
@@ -701,7 +701,7 @@ class _AddItemDialogState extends State<_AddItemDialog> {
               });
             }
           },
-          child: const Text('Crea'),
+          child: const Text('Create'),
         ),
       ],
     );

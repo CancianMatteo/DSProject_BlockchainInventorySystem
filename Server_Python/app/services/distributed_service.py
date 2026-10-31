@@ -492,6 +492,9 @@ def _store_block(
     votes: list[dict[str, Any]],
     changes: dict[str, int],
     catalog: dict[str, dict[str, Any]],
+    vote_phase: str = "prepare",
+    proposer_id: str | None = None,
+    proposer_signature: str | None = None,
 ) -> None:
     transaction_ids = {_transaction_id(tx) for tx in block["transactions"]}
     row = ChainBlock(
@@ -507,8 +510,8 @@ def _store_block(
             },
             sort_keys=True,
         ),
-        author_email=str(block.get("proposer", "distributed-node")),
-        author_sign=None,
+        author_email=str(proposer_id or block.get("proposer", "distributed-node")),
+        author_sign=proposer_signature,
         server_sign="validator-quorum",
     )
     db.add(row)
@@ -521,6 +524,7 @@ def _store_block(
             block_hash=block["block_hash"],
             validator_id=vote["validator_id"],
             signature=vote["signature"],
+            phase=vote_phase,
         )
 
     for trans_id in transaction_ids:
@@ -572,6 +576,7 @@ def chain_from(db: Session, from_height: int) -> dict[str, Any]:
                         "block_hash": vote.block_hash,
                         "validator_id": vote.validator_id,
                         "signature": vote.signature,
+                        "phase": vote.phase,
                     }
                     for vote in votes
                 ],
@@ -604,8 +609,8 @@ def forwarding_monitor(db: Session) -> dict[str, int]:
 
 
 # ---------------------------------------------------------------------------
-# Elixir <-> Python bridge: firma/verifica e operazioni con il motore di
-# consenso (dispatched by "flag" dall'endpoint /api/v1/python_call).
+# Elixir <-> Python bridge: signing, verification, and consensus-engine
+# operations (dispatched by the "flag" field at /api/v1/python_call).
 # ---------------------------------------------------------------------------
 
 _BYZANTINE_SCENARIOS = {
@@ -694,7 +699,7 @@ def verify_validator_signature(
         return False
 
 
-# --- Proposta di blocco (PRE-PREPARE) ---------------------------------------
+# --- Block proposal (PRE-PREPARE) -------------------------------------------
 
 def _proposal_signature_payload(
     height: Any,
@@ -713,7 +718,7 @@ def _proposal_signature_payload(
 def prepare_proposal(db: Session, round_number: int) -> dict[str, Any]:
     block = build_proposal(db, round_number).get("block")
     if not block:
-        # Nessuna transazione in mempool: il motore Elixir registra un warning.
+        # No transactions are in the mempool; the Elixir engine logs a warning.
         return {"flag": "prepare_block", "block_data": None}
 
     content = _proposal_signature_payload(
@@ -767,8 +772,8 @@ def verify_pre_prepare(payload: dict[str, Any]) -> bool:
     if not isinstance(proposer_id, str) or proposer_id not in public_keys:
         return False
 
-    # Proposer deterministico: (height + round) mod numero di validatori,
-    # con i validatori ordinati come il motore Elixir (Enum.sort).
+    # Deterministic proposer: (height + round) mod validator count, with
+    # validators sorted the same way as in the Elixir engine (Enum.sort).
     validators = sorted(public_keys)
     if proposer_id != validators[(height + round_number) % len(validators)]:
         return False
@@ -898,7 +903,7 @@ def verify_pre_prepare_conflict_proof(payload: dict[str, Any]) -> bool:
     )
 
 
-# --- Voti PREPARE / COMMIT ---------------------------------------------------
+# --- PREPARE / COMMIT votes -------------------------------------------------
 
 def _vote_signature_payload(
     phase: str,
@@ -973,6 +978,45 @@ def verify_vote(phase: str, payload: dict[str, Any]) -> bool:
     return verify_validator_signature(validator_id, content, payload.get("signature"))
 
 
+def _verify_phase_votes(
+    block: dict[str, Any],
+    votes: Any,
+    phase: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(votes, list):
+        raise DistributedReject(f"{phase.upper()} certificate must be a list")
+
+    validators = _configured_validator_keys()
+    quorum = 2 * ((len(validators) - 1) // 3) + 1
+    valid_votes: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for vote in votes:
+        if not isinstance(vote, dict):
+            raise DistributedReject("Each certificate vote must be an object")
+        validator_id = vote.get("validator_id")
+        if not isinstance(validator_id, str) or validator_id not in validators:
+            raise DistributedReject("Certificate vote is from an unknown validator")
+        if validator_id in seen:
+            raise DistributedReject("Certificate contains duplicate validator votes")
+        vote_payload = {
+            "height": block.get("height"),
+            "round": block.get("round"),
+            "block_hash": block.get("block_hash"),
+            "validator_id": validator_id,
+            "signature": vote.get("signature"),
+        }
+        if not verify_vote(phase, vote_payload):
+            raise DistributedReject(f"{phase.upper()} signature is invalid for {validator_id}")
+        seen.add(validator_id)
+        valid_votes.append(vote_payload)
+
+    if len(valid_votes) < quorum:
+        raise DistributedReject(
+            f"{phase.upper()} certificate requires {quorum} distinct valid votes"
+        )
+    return valid_votes
+
+
 def verify_prepare_certificate(payload: dict[str, Any]) -> bool:
     block = payload.get("block_data")
     if not isinstance(block, dict) or not verify_pre_prepare(payload):
@@ -1007,6 +1051,26 @@ def verify_prepare_certificate(payload: dict[str, Any]) -> bool:
         valid_votes += 1
 
     return valid_votes >= quorum
+
+
+def verify_commit_certificate(payload: dict[str, Any]) -> bool:
+    block = payload.get("block_data")
+    if not isinstance(block, dict):
+        return False
+    proposal_payload = {
+        "height": block.get("height"),
+        "round": block.get("round"),
+        "proposer_id": payload.get("proposer_id"),
+        "block_data": block,
+        "signature": payload.get("proposer_signature"),
+    }
+    if not verify_pre_prepare(proposal_payload):
+        return False
+    try:
+        _verify_phase_votes(block, payload.get("commit_signatures"), "commit")
+    except DistributedReject:
+        return False
+    return True
 
 
 # --- ROUND CHANGE ------------------------------------------------------------
@@ -1052,10 +1116,16 @@ def verify_round_change(payload: dict[str, Any]) -> bool:
     return False
 
 
-# --- Scrittura del blocco confermato -----------------------------------------
+# --- Persist committed block -------------------------------------------------
 
-def write_committed_block(db: Session, block: Any) -> dict[str, Any]:
-    """Scrive un blocco già ratificato dal quorum PBFT (2f+1) dal motore Elixir."""
+def write_committed_block(
+    db: Session,
+    block: Any,
+    proposer_id: Any,
+    proposer_signature: Any,
+    commit_signatures: Any,
+) -> dict[str, Any]:
+    """Persist a block only with its verifiable proposer signature and COMMIT quorum."""
     if not isinstance(block, dict):
         raise DistributedReject("Committed block must be an object")
     height = block.get("height")
@@ -1066,9 +1136,28 @@ def write_committed_block(db: Session, block: Any) -> dict[str, Any]:
         raise DistributedReject("Committed block must contain transactions")
     if not isinstance(block.get("block_hash"), str) or _compute_block_hash(block) != block["block_hash"]:
         raise DistributedReject("Committed block hash is invalid")
+    proposal_payload = {
+        "height": height,
+        "round": block.get("round"),
+        "proposer_id": proposer_id,
+        "block_data": block,
+        "signature": proposer_signature,
+    }
+    if not verify_pre_prepare(proposal_payload):
+        raise DistributedReject("Committed block proposer signature is invalid")
+    valid_votes = _verify_phase_votes(block, commit_signatures, "commit")
 
     latest = repositories.get_latest_block(db)
     if latest is not None and block["block_hash"] == latest.block_hash:
+        latest.author_email = str(proposer_id)
+        latest.author_sign = proposer_signature
+        repositories.replace_block_votes(
+            db,
+            block_hash=block["block_hash"],
+            votes=valid_votes,
+            phase="commit",
+        )
+        db.commit()
         return {"status": True, "duplicate": True}
     expected_height = (latest.n_block + 1) if latest else 1
     expected_prev_hash = latest.block_hash if latest else None
@@ -1077,7 +1166,49 @@ def write_committed_block(db: Session, block: Any) -> dict[str, Any]:
 
     validated = [_validate_transaction(tx) for tx in transactions]
     changes, catalog = _validate_inventory_transition(_order_transactions(validated))
-    # L'elenco dei voti non è re-inoltrato: il quorum è già stato verificato
-    # dal motore Elixir prima di richiedere la scrittura.
-    _store_block(db, block, [], changes, catalog)
+    _store_block(
+        db,
+        block,
+        valid_votes,
+        changes,
+        catalog,
+        vote_phase="commit",
+        proposer_id=proposer_id,
+        proposer_signature=proposer_signature,
+    )
     return {"status": True}
+
+
+def get_finalized_block(db: Session, height: Any) -> dict[str, Any]:
+    if isinstance(height, bool) or not isinstance(height, int) or height < 1:
+        raise DistributedReject("Finalized block height must be a positive integer")
+    row = repositories.get_block_by_height(db, height)
+    if row is None or not row.author_sign:
+        return {"status": False}
+
+    raw_payload = json.loads(row.changes_json)
+    votes = repositories.get_block_votes_for_hash(db, row.block_hash)
+    commit_signatures = [
+        {"validator_id": vote.validator_id, "signature": vote.signature}
+        for vote in votes
+        if vote.phase == "commit"
+    ]
+    block = {
+        "height": row.n_block,
+        "round": next(
+            (vote.round for vote in votes if vote.phase == "commit"),
+            0,
+        ),
+        "prev_block_hash": row.prev_block_hash,
+        "transactions": raw_payload.get("transactions", []),
+        "block_hash": row.block_hash,
+    }
+    package = {
+        "block_data": block,
+        "proposer_id": row.author_email,
+        "proposer_signature": row.author_sign,
+        "commit_signatures": commit_signatures,
+    }
+    if not verify_commit_certificate(package):
+        return {"status": False}
+    return {"status": True, **package}

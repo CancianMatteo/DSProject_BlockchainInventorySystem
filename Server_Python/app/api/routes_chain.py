@@ -20,7 +20,7 @@ def get_chain_history(
     before_n_block: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
 ):
-    # Supporta la chiamata diretta (test/unità) in cui i default sono Query(...).
+    # Support direct calls (such as unit tests), where defaults are Query(...).
     if isinstance(limit, QueryParam):
         limit = limit.default
     if isinstance(before_n_block, QueryParam):

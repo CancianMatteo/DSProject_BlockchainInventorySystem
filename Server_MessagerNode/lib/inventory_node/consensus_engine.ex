@@ -2,7 +2,7 @@ defmodule InventoryNode.ConsensusEngine do
   use GenServer
   require Logger
 
-  # tempo massimo per chiudere un blocco prima di cambiare Proposer
+  # Maximum time to commit a block before changing proposer.
   @round_timeout 8000
 
   def start_link(opts \\ []) do
@@ -20,12 +20,12 @@ defmodule InventoryNode.ConsensusEngine do
     python_port = (System.get_env("PYTHON_PORT") || "8000") |> String.to_integer()
     peers = parse_peers(System.get_env("PEERS"))
 
-    # In PBFT tutti i nodi (incluso se stesso) formano la lista dei validatori
+    # In PBFT, all nodes (including this node) are part of the validator set.
     validator_nodes = Enum.sort([node_id | Map.keys(peers)])
     total_nodes = length(validator_nodes)
 
-    # N = 3f + 1 -> Quorum = 2f + 1
-    # 4 nodi -> f=1 -> Quorum = 3
+    # N = 3f + 1 -> quorum = 2f + 1.
+    # With four nodes, f = 1 and the quorum is 3.
     f = div(total_nodes - 1, 3)
     quorum = 2 * f + 1
 
@@ -37,27 +37,29 @@ defmodule InventoryNode.ConsensusEngine do
       python_port: python_port,
       quorum: quorum,
 
-      # Stato BFT
-      # numero del blocco
+      # BFT state.
+      # Block height.
       current_height: nil,
-      # tentativo corrente per questa altezza
+      # Current attempt for this height.
       current_round: 0,
       timer_ref: nil,
       timeout_token: nil,
       temporary_signature: nil,
 
-      # contatori per le fasi BFT (prepare_votes ora mappa validator_id => signature)
+      # BFT phase votes; each map stores validator_id => signature.
       prepare_votes: %{},
       commit_votes: %{},
       commit_started: false,
       round_change_started: false,
       round_change_votes: %{},
+      equivocation_evidence: MapSet.new(),
+      equivocation_recovery_targets: %{},
 
-      # Dati del blocco in lavorazione
+      # Block currently being processed.
       pending_block: nil
     }
 
-    Logger.info("BFT-PoA Modificato Avviato. Nodo: #{node_id}. Quorum: #{quorum}/#{total_nodes}")
+    Logger.info("Modified PoA-BFT started. Node: #{node_id}. Quorum: #{quorum}/#{total_nodes}.")
     send(self(), :initialize_from_python)
     {:ok, state}
   end
@@ -67,6 +69,9 @@ defmodule InventoryNode.ConsensusEngine do
     case message do
       {:round_change, payload} ->
         handle_cast_round_change(payload, state)
+
+      {:finalized_block, package} ->
+        handle_cast_finalized_block(package, state)
 
       :trigger_block ->
         handle_cast_trigger_block(state)
@@ -112,16 +117,25 @@ defmodule InventoryNode.ConsensusEngine do
   @impl true
   def handle_info(message, state) do
     case message do
+      :initialize_from_python ->
+        handle_info_initialize_from_python(state)
+
       :round_timeout ->
         handle_info_round_timeout(state)
 
       {:round_timeout, token} when token == state.timeout_token ->
         handle_info_round_timeout(state)
 
-      {:verified_round_change, height, target_round, validator_id, true} ->
-        handle_info_verified_round_change(height, target_round, validator_id, state)
+      {:verified_round_change, height, target_round, validator_id, payload, true} ->
+        handle_info_verified_round_change(
+          height,
+          target_round,
+          validator_id,
+          payload,
+          state
+        )
 
-      {:verified_round_change, _, _, validator_id, false} ->
+      {:verified_round_change, _, _, validator_id, _, false} ->
         handle_info_bad_round_change(validator_id, state)
 
       {:verified_pre_prepare, height, round, proposer_id, block_data, proposer_signature, true} ->
@@ -186,6 +200,17 @@ defmodule InventoryNode.ConsensusEngine do
       {:broadcast_round_change, payload} ->
         handle_info_broadcast_round_change(payload, state)
 
+      {:send_finalized_block, package, target_ids} ->
+        handle_info_send_finalized_block(package, target_ids, state)
+
+      {:finalized_block_imported, height, block_hash, true} ->
+        handle_info_finalized_block_imported(height, block_hash, state)
+
+      {:finalized_block_imported, height, block_hash, false} ->
+        Logger.warning("Finalized block #{height} (#{block_hash}) was not imported.")
+
+        {:noreply, state}
+
       _ ->
         {:noreply, state}
     end
@@ -194,7 +219,7 @@ defmodule InventoryNode.ConsensusEngine do
   defp handle_info_round_timeout(state) do
     if state.commit_started do
       Logger.warning(
-        "COMMIT del blocco #{state.current_height} ancora in corso; attendo il quorum invece di cambiare round."
+        "COMMIT for block #{state.current_height} is still in progress; waiting for quorum instead of changing rounds."
       )
 
       {:noreply, schedule_round_timeout(state)}
@@ -202,7 +227,7 @@ defmodule InventoryNode.ConsensusEngine do
       target_round = state.current_round + 1
 
       Logger.warning(
-        "Timeout blocco #{state.current_height}. Avvio fase ROUND_CHANGE verso il round #{target_round}"
+        "Block #{state.current_height} timed out. Starting ROUND_CHANGE for round #{target_round}."
       )
 
       payload = %{
@@ -218,14 +243,14 @@ defmodule InventoryNode.ConsensusEngine do
           broadcast_to_all(state.peers, {:round_change, signed_payload})
 
         other ->
-          Logger.error("Impossibile firmare ROUND_CHANGE per timeout: #{inspect(other)}")
+          Logger.error("Failed to sign ROUND_CHANGE for timeout: #{inspect(other)}")
       end
 
       {:noreply, %{state | round_change_started: true}}
     end
   end
 
-  # GESTIONE DEL ROUND E PROPOSER (ROUND-ROBIN)
+  # Round and proposer management (round-robin).
 
   defp schedule_round_timeout(state) do
     if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
@@ -237,11 +262,11 @@ defmodule InventoryNode.ConsensusEngine do
   defp start_round(state) do
     timed_state = schedule_round_timeout(state)
 
-    # il proposer è deterministico: (altezza + round) mod (numero totale di nodi)
+    # The proposer is deterministic: (height + round) mod the number of nodes.
     proposer_index = rem(state.current_height + state.current_round, length(state.validators))
     current_proposer = Enum.at(state.validators, proposer_index)
 
-    # pulisce i voti del round precedente
+    # Clear votes from the previous round.
     new_state = %{
       timed_state
       | prepare_votes: %{},
@@ -254,29 +279,28 @@ defmodule InventoryNode.ConsensusEngine do
 
     if current_proposer == state.node_id do
       Logger.info(
-        "[Altezza #{state.current_height}] Sono il Proposer (Round #{state.current_round}); attendo il trigger Python."
+        "[Height #{state.current_height}] I am the proposer (round #{state.current_round}); waiting for the Python trigger."
       )
     else
-      Logger.info("[Altezza #{state.current_height}] Proposer atteso: #{current_proposer}")
+      Logger.info("[Height #{state.current_height}] Expected proposer: #{current_proposer}.")
     end
 
     new_state
   end
 
-  @impl true
-  def handle_info(:initialize_from_python, state) do
+  defp handle_info_initialize_from_python(state) do
     case send_to_python_service(%{"flag" => "chain_state"}, state.python_host, state.python_port) do
       {:ok, %{"next_height" => height}} when is_integer(height) and height > 0 ->
-        Logger.info("Altezza iniziale sincronizzata con Python: #{height}")
+        Logger.info("Initial height synchronized with Python: #{height}.")
         {:noreply, start_round(%{state | current_height: height})}
 
       {:ok, response} ->
-        Logger.error("Python ha restituito uno stato blockchain non valido: #{inspect(response)}")
+        Logger.error("Python returned an invalid blockchain state: #{inspect(response)}")
         Process.send_after(self(), :initialize_from_python, 1_000)
         {:noreply, state}
 
       {:error, reason} ->
-        Logger.error("Impossibile leggere lo stato blockchain da Python: #{reason}")
+        Logger.error("Failed to read blockchain state from Python: #{reason}")
         Process.send_after(self(), :initialize_from_python, 1_000)
         {:noreply, state}
     end
@@ -295,7 +319,7 @@ defmodule InventoryNode.ConsensusEngine do
 
       true ->
         Logger.info(
-          "Trigger proposta ricevuto da Python: #{reason}, #{pending_count} transazioni pendenti."
+          "Proposal trigger received from Python: #{reason}, #{pending_count} pending transactions."
         )
 
         proposed_state = propose_block(state)
@@ -320,44 +344,7 @@ defmodule InventoryNode.ConsensusEngine do
     {:reply, %{"accepted" => false, "status" => "invalid_request"}, state}
   end
 
-  @impl true
-  def handle_info({:round_timeout, token}, %{timeout_token: token} = state) do
-    if state.commit_started do
-      Logger.warning(
-        "COMMIT del blocco #{state.current_height} ancora in corso; attendo il quorum invece di cambiare round."
-      )
-
-      {:noreply, schedule_round_timeout(state)}
-    else
-      target_round = state.current_round + 1
-
-      Logger.warning(
-        "Timeout blocco #{state.current_height}. Avvio fase ROUND_CHANGE verso il round #{target_round}"
-      )
-
-      payload = %{
-        "flag" => "round_change",
-        "reason" => "timeout",
-        "height" => state.current_height,
-        "target_round" => target_round,
-        "validator_id" => state.node_id
-      }
-
-      case send_to_python_service(payload, state.python_host, state.python_port) do
-        {:ok, %{"signature" => signature} = signed_payload} when is_binary(signature) ->
-          broadcast_to_all(state.peers, {:round_change, signed_payload})
-
-        other ->
-          Logger.error("Impossibile firmare ROUND_CHANGE per timeout: #{inspect(other)}")
-      end
-
-      {:noreply, %{state | round_change_started: true}}
-    end
-  end
-
-  def handle_info({:round_timeout, _stale_token}, state), do: {:noreply, state}
-
-  # ROUND CHANGE
+  # ROUND CHANGE.
 
   defp handle_cast_round_change(payload, state) do
     engine_pid = self()
@@ -369,18 +356,27 @@ defmodule InventoryNode.ConsensusEngine do
           send(
             engine_pid,
             {:verified_round_change, payload["height"], payload["target_round"],
-             payload["validator_id"], is_valid}
+             payload["validator_id"], payload, is_valid}
           )
 
         other ->
-          Logger.warning("Verifica ROUND_CHANGE fallita: #{inspect(other)}")
+          Logger.warning("ROUND_CHANGE verification failed: #{inspect(other)}")
       end
     end)
 
     {:noreply, state}
   end
 
-  defp handle_info_verified_round_change(height, target_round, validator_id, state) do
+  defp handle_info_verified_round_change(height, target_round, validator_id, payload, state) do
+    {state, is_new_evidence} = record_equivocation_evidence(payload, state)
+    state = remember_equivocation_recovery_target(state, height, payload)
+
+    if is_new_evidence do
+      broadcast_to_all(state.peers, {:round_change, payload})
+    end
+
+    request_finalized_block_if_committed(height, payload, state)
+
     if height == state.current_height and target_round > state.current_round and
          not state.commit_started do
       current_votes = Map.get(state.round_change_votes, target_round, MapSet.new())
@@ -391,7 +387,7 @@ defmodule InventoryNode.ConsensusEngine do
 
       if MapSet.size(new_votes) >= state.quorum do
         Logger.warning(
-          "Quorum raggiunto per il cambio round. Transizione al round #{target_round}"
+          "Round-change quorum reached. Moving to round #{target_round}."
         )
 
         final_state = %{
@@ -412,13 +408,14 @@ defmodule InventoryNode.ConsensusEngine do
   defp handle_info_bad_round_change(validator_id, state),
     do: ignore_bad_sig(validator_id, state)
 
-  # FASE 1: PRE-PREPARE (proposta del leader)
+  # Phase 1: PRE-PREPARE (leader proposal).
 
   defp handle_cast_trigger_block(state) do
     proposer_index = rem(state.current_height + state.current_round, length(state.validators))
     current_proposer = Enum.at(state.validators, proposer_index)
 
-    if current_proposer == state.node_id and is_nil(state.pending_block) do
+    if current_proposer == state.node_id and is_nil(state.pending_block) and
+         not state.round_change_started do
       {:noreply, propose_block(state)}
     else
       {:noreply, state}
@@ -446,9 +443,7 @@ defmodule InventoryNode.ConsensusEngine do
 
         case send_to_python_service(prepare_payload, state.python_host, state.python_port) do
           {:ok, %{"signature" => prepare_signature}} when is_binary(prepare_signature) ->
-            Logger.info(
-              "Proponendo il blocco #{state.current_height}, round #{state.current_round}"
-            )
+            Logger.info("Proposing block #{state.current_height}, round #{state.current_round}.")
 
             pre_prepare =
               {:pre_prepare, state.current_height, state.current_round, state.node_id, block_data,
@@ -536,6 +531,13 @@ defmodule InventoryNode.ConsensusEngine do
           proposer_id != expected_proposer ->
         {:noreply, state}
 
+      has_equivocation_evidence?(state, height, round, proposer_id) ->
+        Logger.warning(
+          "PRE-PREPARE ignored: equivocation already proven for height #{height}, round #{round}."
+        )
+
+        {:noreply, state}
+
       state.pending_block == block_data ->
         {:noreply, state}
 
@@ -552,7 +554,7 @@ defmodule InventoryNode.ConsensusEngine do
         {:noreply, state}
 
       true ->
-        Logger.info("Pre-Prepare valido da #{proposer_id}. Invio PREPARE unicast al proposer.")
+        Logger.info("Valid PRE-PREPARE from #{proposer_id}. Sending PREPARE to the proposer.")
 
         payload = %{
           "flag" => "prepare",
@@ -574,7 +576,7 @@ defmodule InventoryNode.ConsensusEngine do
              %{state | pending_block: block_data, temporary_signature: proposer_signature}}
 
           other ->
-            Logger.warning("Errore nella componente python per prepare: #{inspect(other)}")
+            Logger.warning("Python PREPARE operation failed: #{inspect(other)}")
             {:noreply, state}
         end
     end
@@ -583,7 +585,7 @@ defmodule InventoryNode.ConsensusEngine do
   defp handle_info_bad_pre_prepare(proposer_id, state),
     do: ignore_bad_sig(proposer_id, state)
 
-  # FASE 2: PREPARE (il proposer riceve le firme in unicast dai nodi)
+  # Phase 2: PREPARE (the proposer receives signatures from nodes by unicast).
 
   defp handle_cast_prepare_vote(height, round, block_hash, validator_id, signature, state) do
     engine_pid = self()
@@ -612,7 +614,7 @@ defmodule InventoryNode.ConsensusEngine do
             )
 
           other ->
-            Logger.warning("Verifica PREPARE fallita per #{validator_id}: #{inspect(other)}")
+            Logger.warning("PREPARE verification failed for #{validator_id}: #{inspect(other)}")
         end
       end)
     end
@@ -637,8 +639,8 @@ defmodule InventoryNode.ConsensusEngine do
            state.node_id ==
              proposer_for(state, height, round) do
         Logger.info(
-          "Quorum PREPARE raggiunto (#{map_size(new_votes)}/#{state.quorum}). " <>
-            "Invio la proposta alla votazione COMMIT."
+          "PREPARE quorum reached (#{map_size(new_votes)}/#{state.quorum}). " <>
+            "Sending the proposal for COMMIT voting."
         )
 
         commit_proposal =
@@ -659,7 +661,7 @@ defmodule InventoryNode.ConsensusEngine do
   defp handle_info_bad_prepare_vote(validator_id, state),
     do: ignore_bad_sig(validator_id, state)
 
-  # FASE 3: COMMIT (votazione separata dopo il certificato PREPARE)
+  # Phase 3: COMMIT (a separate vote after the PREPARE certificate).
 
   defp handle_cast_commit_proposal(
          height,
@@ -699,7 +701,7 @@ defmodule InventoryNode.ConsensusEngine do
             )
 
           other ->
-            Logger.warning("Verifica certificato PREPARE per COMMIT fallita: #{inspect(other)}")
+            Logger.warning("PREPARE certificate verification for COMMIT failed: #{inspect(other)}")
 
             send(
               engine_pid,
@@ -729,9 +731,6 @@ defmodule InventoryNode.ConsensusEngine do
           proposer_id != expected_proposer ->
         {:noreply, state}
 
-      state.commit_started ->
-        {:noreply, state}
-
       state.pending_block != nil and state.pending_block != block_data ->
         report_pre_prepare_conflict(
           height,
@@ -742,6 +741,18 @@ defmodule InventoryNode.ConsensusEngine do
           state
         )
 
+        {:noreply, state}
+
+      has_equivocation_evidence?(state, height, round, proposer_id) and
+          not state.commit_started ->
+        Logger.warning(
+          "COMMIT ignored: equivocation by proposer #{proposer_id} was proven " <>
+            "for height #{height}, round #{round}."
+        )
+
+        {:noreply, state}
+
+      state.commit_started ->
         {:noreply, state}
 
       true ->
@@ -813,10 +824,10 @@ defmodule InventoryNode.ConsensusEngine do
           )
         else
           {:ok, %{"status" => false}} ->
-            Logger.warning("Prova PREPARE non valida nel voto COMMIT di #{validator_id}")
+            Logger.warning("Invalid PREPARE certificate in COMMIT vote from #{validator_id}.")
 
           other ->
-            Logger.warning("Verifica voto COMMIT fallita per #{validator_id}: #{inspect(other)}")
+            Logger.warning("COMMIT vote verification failed for #{validator_id}: #{inspect(other)}")
         end
       end)
     end
@@ -852,7 +863,15 @@ defmodule InventoryNode.ConsensusEngine do
           state
         )
 
-        Logger.warning("Voto COMMIT concorrente ignorato per il blocco #{block_hash}")
+        Logger.warning("Ignoring conflicting COMMIT vote for block #{block_hash}.")
+        {:noreply, state}
+
+      has_equivocation_evidence?(state, height, round, proposer_id) and
+          not state.commit_started ->
+        Logger.warning(
+          "Ignoring COMMIT vote after equivocation proof for height #{height}, round #{round}."
+        )
+
         {:noreply, state}
 
       true ->
@@ -925,7 +944,7 @@ defmodule InventoryNode.ConsensusEngine do
           }
 
         other ->
-          Logger.error("Firma COMMIT non disponibile: #{inspect(other)}")
+          Logger.error("COMMIT signature unavailable: #{inspect(other)}")
           state
       end
     end
@@ -939,19 +958,47 @@ defmodule InventoryNode.ConsensusEngine do
 
   defp write_committed_block(state, height) do
     Logger.info(
-      "Quorum COMMIT raggiunto (#{map_size(state.commit_votes)}/#{state.quorum}). " <>
-        "Scrittura del blocco #{height}."
+      "COMMIT quorum reached (#{map_size(state.commit_votes)}/#{state.quorum}). " <>
+        "Writing block #{height}."
     )
 
     write_payload = %{
       "flag" => "write_block",
+      "proposer_id" => proposer_for(state, height, state.pending_block["round"]),
+      "proposer_signature" => state.temporary_signature,
       "height" => height,
-      "block_data" => state.pending_block
+      "block_data" => state.pending_block,
+      "commit_signatures" =>
+        Enum.map(state.commit_votes, fn {validator_id, signature} ->
+          %{"validator_id" => validator_id, "signature" => signature}
+        end)
     }
 
     case send_to_python_service(write_payload, state.python_host, state.python_port) do
       {:ok, %{"status" => true}} ->
-        Logger.info("Blocco #{height} scritto correttamente sul servizio Python.")
+        Logger.info("Block #{height} was successfully written to the Python service.")
+
+        proposer_id = proposer_for(state, height, state.pending_block["round"])
+
+        package = %{
+          "block_data" => state.pending_block,
+          "proposer_id" => proposer_id,
+          "proposer_signature" => state.temporary_signature,
+          "commit_signatures" => write_payload["commit_signatures"]
+        }
+
+        round = state.pending_block["round"]
+        recovery_targets = Map.get(state.equivocation_recovery_targets, {height, round}, MapSet.new())
+
+        if MapSet.size(recovery_targets) > 0 do
+          target_ids = MapSet.to_list(recovery_targets)
+
+          Logger.info(
+            "Sending finalized block #{height} to equivocation reporter(s): #{Enum.join(target_ids, ", ")}."
+          )
+
+          send_to_peer_ids(target_ids, state.peers, {:finalized_block, package})
+        end
 
         new_state = %{
           state
@@ -962,13 +1009,15 @@ defmodule InventoryNode.ConsensusEngine do
             prepare_votes: %{},
             commit_votes: %{},
             commit_started: false,
-            round_change_votes: %{}
+            round_change_votes: %{},
+            equivocation_recovery_targets:
+              Map.delete(state.equivocation_recovery_targets, {height, round})
         }
 
         {:noreply, start_round(new_state)}
 
       other ->
-        Logger.error("Errore nella scrittura del blocco #{height}: #{inspect(other)}")
+        Logger.error("Failed to write block #{height}: #{inspect(other)}")
         {:noreply, state}
     end
   end
@@ -1006,7 +1055,7 @@ defmodule InventoryNode.ConsensusEngine do
           send(engine_pid, {:broadcast_round_change, round_change})
 
         other ->
-          Logger.warning("Nessuna prova valida di doppia proposta: #{inspect(other)}")
+          Logger.warning(          "No valid equivocation proof: #{inspect(other)}")
       end
     end)
 
@@ -1018,7 +1067,192 @@ defmodule InventoryNode.ConsensusEngine do
     {:noreply, state}
   end
 
-  # Funzioni di supporto
+  defp record_equivocation_evidence(payload, state) do
+    with true <- is_map(payload),
+         height when is_integer(height) <- payload["height"],
+         round when is_integer(round) <- payload["round"],
+         proposer_id when is_binary(proposer_id) <- payload["proposer_id"],
+         true <- is_binary(payload["forged_block_hash"]),
+         true <- is_binary(payload["conflicting_block_hash"]) do
+      key = {height, round, proposer_id}
+
+      if MapSet.member?(state.equivocation_evidence, key) do
+        {state, false}
+      else
+        Logger.warning(
+          "Valid equivocation proof for proposer #{proposer_id}, height #{height}, round #{round}."
+        )
+
+        updated_state = %{
+          state
+          | equivocation_evidence: MapSet.put(state.equivocation_evidence, key)
+        }
+
+        if height == state.current_height and round == state.current_round and
+             not state.commit_started do
+          {%{
+             updated_state
+             | pending_block: nil,
+               temporary_signature: nil,
+               prepare_votes: %{},
+               commit_votes: %{},
+               round_change_started: true
+           }, true}
+        else
+          {updated_state, true}
+        end
+      end
+    else
+      _ -> {state, false}
+    end
+  end
+
+  defp has_equivocation_evidence?(state, height, round, proposer_id) do
+    MapSet.member?(state.equivocation_evidence, {height, round, proposer_id})
+  end
+
+  defp remember_equivocation_recovery_target(state, height, payload) do
+    with true <- equivocation_proof?(payload),
+         round when is_integer(round) <- payload["round"],
+         reporter_id when is_binary(reporter_id) <- payload["validator_id"],
+         true <- reporter_id in Map.keys(state.peers),
+         true <- height == state.current_height,
+         true <- round == state.current_round,
+         true <- state.commit_started do
+      targets =
+        Map.update(
+          state.equivocation_recovery_targets,
+          {height, round},
+          MapSet.new([reporter_id]),
+          &MapSet.put(&1, reporter_id)
+        )
+
+      %{state | equivocation_recovery_targets: targets}
+    else
+      _ -> state
+    end
+  end
+
+  defp equivocation_proof?(payload) when is_map(payload) do
+    is_integer(payload["height"]) and is_integer(payload["round"]) and
+      is_binary(payload["proposer_id"]) and is_binary(payload["validator_id"]) and
+      is_binary(payload["forged_block_hash"]) and
+      is_binary(payload["forged_signature"]) and
+      is_binary(payload["conflicting_block_hash"]) and
+      is_binary(payload["conflicting_signature"])
+  end
+
+  defp equivocation_proof?(_payload), do: false
+
+  defp request_finalized_block_if_committed(height, payload, state)
+       when is_integer(height) and is_integer(state.current_height) and
+              height < state.current_height do
+    if equivocation_proof?(payload) do
+      engine_pid = self()
+      reporter_id = payload["validator_id"]
+
+      Task.start(fn ->
+        case send_to_python_service(
+               %{"flag" => "get_finalized_block", "height" => height},
+               state.python_host,
+               state.python_port
+             ) do
+          {:ok, %{"status" => true} = response} ->
+            package = Map.delete(response, "status")
+            send(engine_pid, {:send_finalized_block, package, [reporter_id]})
+
+          {:ok, %{"status" => false}} ->
+            Logger.info(
+              "No local COMMIT certificate is available for height #{height} " <>
+                "(report from #{inspect(payload["proposer_id"])})."
+            )
+
+          other ->
+            Logger.warning("Failed to retrieve finalized block #{height}: #{inspect(other)}")
+        end
+      end)
+    end
+
+    :ok
+  end
+
+  defp request_finalized_block_if_committed(_height, _payload, _state), do: :ok
+
+  defp handle_info_send_finalized_block(package, target_ids, state) do
+    target_ids = Enum.filter(target_ids, &Map.has_key?(state.peers, &1))
+
+    if target_ids != [] do
+      send_to_peer_ids(target_ids, state.peers, {:finalized_block, package})
+    end
+
+    {:noreply, state}
+  end
+
+  defp handle_cast_finalized_block(package, state) when is_map(package) do
+    block = package["block_data"]
+
+    if is_map(block) and is_integer(block["height"]) and is_binary(block["block_hash"]) do
+      engine_pid = self()
+      payload = Map.put(package, "flag", "import_finalized_block")
+
+      Task.start(fn ->
+        case send_to_python_service(payload, state.python_host, state.python_port) do
+          {:ok, %{"status" => true}} ->
+            send(
+              engine_pid,
+              {:finalized_block_imported, block["height"], block["block_hash"], true}
+            )
+
+          {:ok, %{"status" => false}} ->
+            send(
+              engine_pid,
+              {:finalized_block_imported, block["height"], block["block_hash"], false}
+            )
+
+          other ->
+            Logger.warning(
+              "Failed to import finalized block #{block["height"]}: #{inspect(other)}"
+            )
+        end
+      end)
+    else
+      Logger.warning("Malformed finalized-block package; ignoring it.")
+    end
+
+    {:noreply, state}
+  end
+
+  defp handle_cast_finalized_block(_package, state) do
+    Logger.warning("Malformed finalized-block package; ignoring it.")
+    {:noreply, state}
+  end
+
+  defp handle_info_finalized_block_imported(height, block_hash, state) do
+    if height == state.current_height do
+      Logger.info(
+        "Finalized block #{height} (#{block_hash}) imported with a COMMIT certificate."
+      )
+
+      next_state = %{
+        state
+        | current_height: height + 1,
+          current_round: 0,
+          pending_block: nil,
+          temporary_signature: nil,
+          prepare_votes: %{},
+          commit_votes: %{},
+          commit_started: false,
+          round_change_started: false,
+          round_change_votes: %{}
+      }
+
+      {:noreply, start_round(next_state)}
+    else
+      {:noreply, state}
+    end
+  end
+
+  # Helpers.
 
   defp proposer_for(state, height, round)
        when is_integer(height) and height > 0 and is_integer(round) and round >= 0 do
@@ -1028,7 +1262,7 @@ defmodule InventoryNode.ConsensusEngine do
   defp proposer_for(_state, _height, _round), do: nil
 
   defp ignore_bad_sig(node_id, state) do
-    Logger.error("Firma invalida da #{node_id}. Possibile nodo Bizantino!")
+    Logger.error("Invalid signature from #{node_id}. Possible Byzantine validator!")
     {:noreply, state}
   end
 
@@ -1049,7 +1283,7 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
-  # Invio unicast mirato (es. inviare la firma prepare solo al proposer)
+  # Send a message to one peer (for example, a PREPARE vote to the proposer).
   defp send_unicast(target_id, peers, message, current_node_id) do
     if target_id == current_node_id do
       GenServer.cast(__MODULE__, message)
@@ -1061,7 +1295,7 @@ defmodule InventoryNode.ConsensusEngine do
           :ok
 
         nil ->
-          Logger.error("Impossibile trovare host/port per il target unicast #{target_id}")
+          Logger.error("Cannot find host/port for unicast target #{target_id}.")
       end
     end
   end
@@ -1096,11 +1330,11 @@ defmodule InventoryNode.ConsensusEngine do
             :ok
 
           {:error, reason} ->
-            Logger.warning("Invio al peer #{peer_id} fallito: #{inspect(reason)}")
+            Logger.warning("Failed to send message to peer #{peer_id}: #{inspect(reason)}")
         end
 
       {:error, reason} ->
-        Logger.warning("Connessione al peer #{peer_id} fallita: #{inspect(reason)}")
+        Logger.warning("Failed to connect to peer #{peer_id}: #{inspect(reason)}")
     end
   end
 

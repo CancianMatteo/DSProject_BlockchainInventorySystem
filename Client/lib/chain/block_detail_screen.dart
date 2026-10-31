@@ -9,7 +9,7 @@ class BlockDetailScreen extends StatelessWidget {
   const BlockDetailScreen({super.key, required this.blockId, this.block});
 
   String _formatChanges(Block b) {
-    if (b.changes.isEmpty) return 'Nessuna modifica';
+    if (b.changes.isEmpty) return 'No changes';
     final lines = <String>[];
     b.changes.forEach((itemId, delta) {
       final item = b.itemCatalog[itemId] as Map<String, dynamic>?;
@@ -28,39 +28,39 @@ class BlockDetailScreen extends StatelessWidget {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.pop(),
-          tooltip: 'Torna allo storico',
+          tooltip: 'Back to history',
         ),
-        title: Text('Dettaglio Blocco #$blockId'),
+        title: Text('Block details #$blockId'),
       ),
       body: data == null
           ? const Center(
               child: Text(
-                'Dettaglio non disponibile, apri dal log transazioni.',
+                'Details are unavailable. Open this block from the transaction history.',
               ),
             )
           : Padding(
               padding: const EdgeInsets.all(16.0),
               child: ListView(
                 children: [
-                  _buildDetailCard('Autore', data.authorEmail),
+                  _buildDetailCard('Author', data.authorEmail),
                   _buildDetailCard(
-                    'Data e Ora',
+                    'Date and time',
                     data.datetime.toLocal().toString(),
                   ),
-                  _buildDetailCard('Modifiche', _formatChanges(data)),
+                  _buildDetailCard('Changes', _formatChanges(data)),
                   _buildDetailCard(
-                    'Firma Autore',
+                    'Author signature',
                     data.authorSign ?? 'N/A',
                     isCode: true,
                   ),
                   _buildDetailCard(
-                    'Firma Server',
+                    'Server signature',
                     data.serverSign,
                     isCode: true,
                   ),
-                  _buildDetailCard('Hash Blocco', data.blockHash, isCode: true),
+                  _buildDetailCard('Block hash', data.blockHash, isCode: true),
                   _buildDetailCard(
-                    'Hash Blocco Precedente',
+                    'Previous block hash',
                     data.prevBlockHash ?? 'GENESIS',
                     isCode: true,
                   ),

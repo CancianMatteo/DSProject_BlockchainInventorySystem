@@ -7,7 +7,7 @@ import 'package:timeago/timeago.dart' as timeago;
 
 void main() {
   // Set the default locale for timeago
-  timeago.setLocaleMessages('it', timeago.ItMessages());
+  timeago.setLocaleMessages('en', timeago.EnMessages());
   runApp(const MyApp());
 }
 
