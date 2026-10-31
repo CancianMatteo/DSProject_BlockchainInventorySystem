@@ -589,6 +589,38 @@ def transaction_status(db: Session, trans_id: str) -> dict[str, Any]:
     return {"trans_id": trans_id, "status": "unknown"}
 
 
+def user_transactions(db: Session, client_id: str) -> list[dict[str, Any]]:
+    transactions: dict[str, dict[str, Any]] = {}
+    for row in repositories.get_pending_transactions(db):
+        transaction = json.loads(row.transaction_json)
+        if transaction.get("client_ID", transaction.get("from_node")) == client_id:
+            transactions[row.trans_id] = {
+                **transaction,
+                "status": row.status,
+                "forwarding_status": forwarding_status(db, row.trans_id),
+            }
+    for block in repositories.get_all_blocks(db):
+        payload = json.loads(block.changes_json)
+        block_transactions = payload.get("transactions", []) if isinstance(payload, dict) else []
+        for transaction in block_transactions:
+            if not isinstance(transaction, dict):
+                continue
+            if transaction.get("client_ID", transaction.get("from_node")) != client_id:
+                continue
+            trans_id = _transaction_id(transaction)
+            transactions[trans_id] = {
+                **transaction,
+                "status": "finalized",
+                "block_number": block.n_block,
+                "forwarding_status": forwarding_status(db, trans_id),
+            }
+    return sorted(
+        transactions.values(),
+        key=lambda transaction: transaction.get("timestamp", ""),
+        reverse=True,
+    )
+
+
 def forwarding_status(db: Session, trans_id: str) -> str:
     row = repositories.get_forwarding(db, trans_id)
     return row.status if row is not None else "not_queued"

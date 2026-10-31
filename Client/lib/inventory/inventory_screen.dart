@@ -8,6 +8,7 @@ import 'package:distr_bis/models/inventory_item.dart';
 import 'package:distr_bis/notifications/notification_provider.dart';
 import 'package:distr_bis/services/api_service.dart';
 import 'package:distr_bis/services/transaction_signer.dart';
+import 'package:distr_bis/transactions/pending_transaction_cache.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
 
@@ -76,6 +77,49 @@ class _InventoryScreenState extends State<InventoryScreen> {
           ),
         );
       }
+
+      void _applyPendingOverlay() {
+        final itemsById = {for (final item in _inventoryItems) item.id: item};
+        final deltas = <String, int>{};
+        for (final pending
+            in context.read<PendingTransactionCache>().transactions) {
+          final transaction = pending.transaction;
+          final itemId = transaction['item_id']?.toString();
+          final quantity = transaction['quantity'];
+          if (itemId == null || quantity is! int) continue;
+          deltas[itemId] = (deltas[itemId] ?? 0) + quantity;
+          if (!itemsById.containsKey(itemId)) {
+            final metadata = (transaction['item_catalog'] as Map?)?[itemId];
+            if (metadata is Map) {
+              itemsById[itemId] = InventoryItem(
+                id: itemId,
+                name: metadata['itemName']?.toString() ?? itemId,
+                brand: metadata['brand']?.toString() ?? '',
+                itemType: metadata['itemType']?.toString() ?? '',
+                category: metadata['category']?.toString() ?? '',
+                quantity: 0,
+                barcode: metadata['barcode']?.toString(),
+              );
+            }
+          }
+        }
+        _inventoryItems = itemsById.values.map((item) {
+          final delta = deltas[item.id] ?? 0;
+          return delta == 0
+              ? item
+              : InventoryItem(
+                  id: item.id,
+                  name: item.name,
+                  brand: item.brand,
+                  itemType: item.itemType,
+                  category: item.category,
+                  quantity: item.quantity + delta,
+                  barcode: item.barcode,
+                );
+        }).toList();
+      }
+
+      _applyPendingOverlay();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -325,6 +369,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
             throw Exception(response.errorMessage ?? 'Transaction rejected');
           }
           transactionIds.add(transactionId);
+          if (mounted) {
+            context.read<PendingTransactionCache>().add(
+              transaction.transaction,
+            );
+          }
         }
 
         // Submit the complete batch before waiting for consensus so the
@@ -335,6 +384,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
             transactionId,
           );
           allFinalized = allFinalized && finalized;
+          if (mounted && finalized) {
+            context.read<PendingTransactionCache>().updateStatus(
+              transactionId,
+              'finalized',
+            );
+          }
         }
 
         if (!allFinalized && mounted) {
@@ -364,17 +419,19 @@ class _InventoryScreenState extends State<InventoryScreen> {
           content: Text(
             allFinalized
                 ? 'Transazioni confermate nel blocco.'
-                : 'Transazioni aggiunte al mempool.',
+                : 'Transazioni aggiunte al mempool. Restano visibili fino alla conferma.',
           ),
           backgroundColor: allFinalized ? Colors.green : Colors.orange,
         ),
       );
-      setState(() {
-        _quantityChanges.clear();
-        _newItems.clear();
-        _isApplyButtonEnabled = false;
-      });
-      _fetchInventory();
+      if (allFinalized) {
+        setState(() {
+          _quantityChanges.clear();
+          _newItems.clear();
+          _isApplyButtonEnabled = false;
+        });
+        await _fetchInventory();
+      }
     }
   }
 

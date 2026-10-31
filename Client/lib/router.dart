@@ -10,6 +10,7 @@ import 'package:distr_bis/chain/chain_log_screen.dart';
 import 'package:distr_bis/inventory/inventory_screen.dart';
 import 'package:distr_bis/notifications/notification_provider.dart';
 import 'package:distr_bis/notifications/notifications_screen.dart';
+import 'package:distr_bis/transactions/transactions_screen.dart';
 import 'package:distr_bis/profile/profile_screen.dart';
 import 'package:distr_bis/profile/users_management_screen.dart';
 import 'package:provider/provider.dart';
@@ -35,7 +36,7 @@ class AppRouter {
             builder: (context, state) => const InventoryScreen(),
           ),
           GoRoute(
-            path: '/chain-log',
+            path: '/blockchain',
             builder: (context, state) => const ChainLogScreen(),
             routes: [
               GoRoute(
@@ -49,6 +50,10 @@ class AppRouter {
                 },
               ),
             ],
+          ),
+          GoRoute(
+            path: '/transactions',
+            builder: (context, state) => const TransactionsScreen(),
           ),
           GoRoute(
             path: '/notifications',
@@ -107,8 +112,8 @@ class MainScaffold extends StatelessWidget {
 
   int _calculateSelectedIndex() {
     final location = state.uri.toString();
-    if (location.startsWith('/chain-log')) return 1;
-    if (location.startsWith('/notifications')) return 2;
+    if (location.startsWith('/transactions')) return 1;
+    if (location.startsWith('/blockchain')) return 2;
     if (location.startsWith('/profile')) return 3;
     if (location.startsWith('/')) return 0;
     return 0;
@@ -120,10 +125,10 @@ class MainScaffold extends StatelessWidget {
         GoRouter.of(context).go('/');
         break;
       case 1:
-        GoRouter.of(context).go('/chain-log');
+        GoRouter.of(context).go('/transactions');
         break;
       case 2:
-        GoRouter.of(context).go('/notifications');
+        GoRouter.of(context).go('/blockchain');
         break;
       case 3:
         GoRouter.of(context).go('/profile');
@@ -164,7 +169,7 @@ class MainScaffold extends StatelessWidget {
                 BottomNavigationBarItem(
                   icon: Stack(
                     children: [
-                      const Icon(Icons.notifications_outlined),
+                      const Icon(Icons.link),
                       if (hasUnreadNotifications)
                         Positioned(
                           right: 0,
@@ -182,7 +187,7 @@ class MainScaffold extends StatelessWidget {
                         ),
                     ],
                   ),
-                  label: 'Notifiche',
+                  label: 'Blockchain',
                 ),
                 const BottomNavigationBarItem(
                   icon: Icon(Icons.person_outline),

@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, Depends, Query
 from fastapi.params import Query as QueryParam
 from sqlalchemy.orm import Session
@@ -101,3 +103,38 @@ def get_transaction_status(
 @router.get("/forwarding_monitor")
 def get_forwarding_monitor(db: Session = Depends(get_db)):
     return {"ok": True, **distributed_service.forwarding_monitor(db)}
+
+
+@router.get("/pending_transactions")
+def get_pending_transactions(db: Session = Depends(get_db)):
+    return {
+        "ok": True,
+        "transactions": [
+            {
+                **json.loads(row.transaction_json),
+                "status": row.status,
+                "forwarding_status": distributed_service.forwarding_status(
+                    db, row.trans_id
+                ),
+            }
+            for row in repositories.get_pending_transactions(db)
+        ],
+    }
+
+
+@router.post("/user_transactions")
+def get_user_transactions(
+    payload: TransactionStatusRequest,
+    db: Session = Depends(get_db),
+):
+    token = auth_service.validate_token(db, payload.session_token)
+    client_id = token.get("sub")
+    if not client_id:
+        raise distributed_service.DistributedReject(
+            "Invalid session token",
+            status_code=401,
+        )
+    return {
+        "ok": True,
+        "transactions": distributed_service.user_transactions(db, client_id),
+    }

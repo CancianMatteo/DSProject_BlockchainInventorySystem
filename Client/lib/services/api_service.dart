@@ -419,6 +419,34 @@ class ApiService {
     }
   }
 
+  Future<ApiResponse<List<Map<String, dynamic>>>> getUserTransactions(
+    String sessionToken,
+  ) async {
+    try {
+      final response = await _httpClient.post(
+        _buildUri('/api/v1/chain/user_transactions'),
+        headers: _headers,
+        body: jsonEncode({'session_token': sessionToken, 'trans_id': 'all'}),
+      );
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return ApiResponse.fromJson(body, (data) {
+          final rows = (data as Map<String, dynamic>)['transactions'];
+          return (rows as List<dynamic>)
+              .map((row) => Map<String, dynamic>.from(row as Map))
+              .toList();
+        });
+      }
+      return ApiResponse.error(_extractErrorMessage(body));
+    } on SocketException {
+      return ApiResponse.error(
+        'Server blockchain non raggiungibile al $_baseUrl',
+      );
+    } catch (e) {
+      return ApiResponse.error('Si è verificato un errore imprevisto: $e');
+    }
+  }
+
   Future<bool> waitForTransactionFinalization(
     String sessionToken,
     String transactionId, {

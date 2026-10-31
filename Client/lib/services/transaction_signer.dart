@@ -24,7 +24,8 @@ class TransactionSigner {
     final publicKey = await keyPair.extractPublicKey();
 
     final unsigned = <String, dynamic>{
-      ...transaction,
+      for (final entry in transaction.entries)
+        if (entry.key != 'flag') entry.key: entry.value,
       'client_public_key': base64Encode(publicKey.bytes),
     };
     final signature = await _algorithm.sign(
@@ -34,6 +35,7 @@ class TransactionSigner {
 
     return SignedTransaction({
       ...unsigned,
+      if (transaction.containsKey('flag')) 'flag': transaction['flag'],
       'signature': base64Encode(signature.bytes),
     });
   }

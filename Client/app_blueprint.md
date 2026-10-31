@@ -56,9 +56,11 @@ L'applicazione utilizza una barra di navigazione inferiore fissa a 4 sezioni.
 - **Trasporto API:** Le chiamate al backend usano HTTP non cifrato.
 - **Scrittura dei blocchi:** Il backend accetta solo blocchi proposti con almeno tre voti validi di validatori distinti; le richieste legacy del client con sole variazioni di inventario vengono rifiutate.
 - **Endpoint per flavor (build-time):**
-    - `APP_FLAVOR=prod` (default) usa `API_BASE_URL_PROD`.
-    - `APP_FLAVOR=dev` usa `API_BASE_URL_DEV`.
+    - `APP_FLAVOR=prod` (default) usa `API_BASE_URL_PROD`, predefinito a `http://100.67.33.52:8002`.
+    - `APP_FLAVOR=dev` usa `API_BASE_URL_DEV`, predefinito a `http://100.67.33.52:8002`.
     - `API_BASE_URL` ha precedenza su qualsiasi flavor e forza un endpoint specifico.
+    - Le variabili possono essere fornite tramite `.env` con
+      `flutter run --dart-define-from-file=.env`.
 
 ## 4. Current Plan
 

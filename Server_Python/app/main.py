@@ -6,7 +6,8 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import httpx
-from sqlalchemy.exc import SQLAlchemyError, inspect, text
+from sqlalchemy import inspect, text
+from sqlalchemy.exc import SQLAlchemyError
 from app.api.routes_auth import router as auth_router
 from app.api.routes_chain import router as chain_router
 from app.api.routes_health import router as health_router
