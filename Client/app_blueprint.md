@@ -1,78 +1,113 @@
-# Blueprint: Blockchain Inventory System (BIS)
+# Flutter client blueprint
 
-## 1. Panoramica del Progetto
+## 1. Scope
 
-Questa applicazione Flutter, denominata **Blockchain Inventory System (BIS)**, funge da client mobile per la gestione di un inventario decentralizzato basato su blockchain. L'app permetterà agli utenti di autenticarsi, visualizzare lo stato attuale dell'inventario, consultare lo storico delle modifiche e proporre nuove transazioni (blocchi) alla blockchain.
+The Flutter application is a client of the Python validator API. It does not
+participate in proposer selection or consensus. It authenticates users,
+submits signed inventory transactions, displays committed inventory, and
+shows a local pending overlay for the requesting user.
 
-L'architettura si basa sulla separazione delle responsabilità, utilizzando state management, routing dichiarativo e un'interfaccia utente moderna e reattiva.
+The demo transport is HTTP. The default API endpoint is configured at build
+time with `API_BASE_URL` or the selected app flavor. HTTPS and certificate
+validation are deployment hardening work, not part of the current demo.
 
-## 2. Stile, Design e Funzionalità
+## 2. Authentication and routing
 
-### **Design e UI/UX**
-*   **Stile:** Moderno, pulito e orientato ai dati, con un forte focus sulla leggibilità e l'interazione rapida.
-*   **Font:** `google_fonts` per una tipografia chiara e moderna.
-*   **Tema:** Supporto per modalità chiara e scura.
+- Login returns a JWT session token and the authenticated user profile.
+- Authenticated routes are protected by `go_router`.
+- Password reset uses the backend OTP endpoints.
+- Every API request includes `X-App-Token`; authenticated chain operations
+  also include the session token in their JSON payload.
 
-### **Autenticazione**
-*   **Login/Logout:** Flusso di autenticazione standard con gestione del token di sessione.
-*   **Recupero Password:**
-    *   Un percorso a due passaggi (`/login/forgot-password` e `/login/forgot-password/reset-password`).
-    *   L'utente inserisce l'email per ricevere un OTP.
-    *   L'utente inserisce l'OTP e la nuova password per completare il reset.
-*   **Routing Protetto:** `go_router` gestisce i reindirizzamenti per le rotte autenticate e non.
+## 3. Screens and routes
 
-### **Schermata Inventario**
-*   **Filtri e Ricerca:** La schermata include filtri a `Chip` e una funzione di ricerca per una facile navigazione nell'inventario. È sempre presente la categoria **"Tutti"**.
-*   **Interattività:** Un pulsante "APPLICA" per consolidare le variazioni di quantità e inviarle alla blockchain.
+| Screen | Route | Responsibility |
+|---|---|---|
+| Inventario | `/` | Committed inventory plus the local pending overlay |
+| Transazioni | `/transactions` | The current user's transactions and status |
+| Blockchain | `/blockchain` | Committed block history |
+| Block detail | `/blockchain/<block>` | Block changes, proposer, and signatures |
+| Profilo | `/profile` | User data, statistics, and administration |
+| Notifiche | `/notifications` | Internal notification screen, not a bottom-nav item |
 
-### **Consultazione Blockchain (Storico Transazioni)**
-*   **Elenco Blocchi:** La schermata `/chain-log` mostra lo storico completo di tutti i blocchi della chain.
-*   **Ricerca:** Un'icona di ricerca nell'AppBar permette di filtrare l'elenco dei blocchi. Inizialmente, la ricerca avverrà per **nome dell'autore** del blocco.
-*   **Dettaglio Blocco:** Navigazione al dettaglio di ogni transazione (`/chain-log/:blockId`).
+The bottom navigation labels are **Inventario**, **Transazioni**,
+**Blockchain**, and **Profilo**. The Blockchain tab uses a chain/link icon.
 
-### **Schermata Notifiche**
-*   **Layout Compatto:** Le notifiche sono presentate in un elenco ad alta densità, separate da una linea.
-*   **Visualizzazione:** Ogni notifica mostra nome dell'articolo, quantità, autore, tempo trascorso e, se presente, una nota.
+## 4. Transaction flow
 
-### **Navigazione Principale (BottomNavigationBar)**
+The inventory screen creates a transaction with:
 
-L'applicazione utilizza una barra di navigazione inferiore fissa a 4 sezioni.
+```json
+{
+  "item_id": "...",
+  "quantity": 2,
+  "location": "...",
+  "client_ID": "...",
+  "client_public_key": "...",
+  "trans_id": "...",
+  "timestamp": "...",
+  "item_catalog": {},
+  "signature": "..."
+}
+```
 
-1.  **Inventario (Home)** - `/`
-2.  **Transazioni** - `/chain-log`
-3.  **Notifiche** - `/notifications`
-4.  **Profilo** - `/profile`
+Positive quantity adds stock; negative quantity removes stock. The client
+signs the canonical transaction payload. The transport `flag` is excluded
+from the signature.
 
-### **Funzionalità Implementate**
-*   **Autenticazione e Navigazione:** Login/Logout, recupero password e routing protetto (`go_router`).
-*   **State Management:** `provider` per la gestione dello stato di autenticazione e notifiche.
-*   **Modelli Dati:** Definizione di `User`, `Notification`, `Block`, e `ApiResponse`.
-*   **Servizio API:** `ApiService` centralizzato per le chiamate di backend.
-*   **Navigazione a 4 Schede:** `BottomNavigationBar` fissa con indicatore di notifiche non lette.
+`POST /api/v1/chain/add_transaction` returns a pending confirmation and a
+forwarding status. The app polls `/transaction_status` while waiting for the
+transaction to become `finalized`.
 
-## 3. Backend Integration
+## 5. Pending-state reconciliation
 
-- **X-App-Token:** Tutte le chiamate API includono un header `X-App-Token` con un valore segreto per l'autenticazione a livello di applicazione.
-- **Trasporto API:** Le chiamate al backend usano HTTP non cifrato.
-- **Scrittura dei blocchi:** Il backend accetta solo blocchi proposti con almeno tre voti validi di validatori distinti; le richieste legacy del client con sole variazioni di inventario vengono rifiutate.
-- **Endpoint per flavor (build-time):**
-    - `APP_FLAVOR=prod` (default) usa `API_BASE_URL_PROD`, predefinito a `http://100.67.33.52:8002`.
-    - `APP_FLAVOR=dev` usa `API_BASE_URL_DEV`, predefinito a `http://100.67.33.52:8002`.
-    - `API_BASE_URL` ha precedenza su qualsiasi flavor e forza un endpoint specifico.
-    - Le variabili possono essere fornite tramite `.env` con
-      `flutter run --dart-define-from-file=.env`.
+`PendingTransactionCache` is an in-memory cache of locally submitted
+transactions. It is not authoritative. On every Inventory and Transactions
+refresh, the client calls `/user_transactions` and:
 
-## 4. Current Plan
+1. matches rows by `trans_id`;
+2. removes cached entries whose server status is `finalized` or `rejected`;
+3. updates any remaining cached status;
+4. applies the pending quantity overlay only after reconciliation.
 
-### Bug Fixes
+This ordering is required: otherwise a committed quantity can be added a
+second time by a stale local overlay.
 
-- **Inventory Loading:** Fixed the perpetual loading issue by:
-    - Passing the session token in the `blockchainSync` API call.
-    - Adding robust `try-catch-finally` error handling to the `_fetchInventory` method.
-    - Including the `X-App-Token` in all API requests.
-- **`avoid_returning_null_for_void`:** Fixed in `api_service.dart`.
-- **`unused_import`:** Fixed in `notification_model.dart`.
-- **`deprecated_member_use`:** Fixed in `router.dart`.
-- **`use_build_context_synchronously`:** Fixed in `login_screen.dart`, `reset_password_screen.dart`, and `forgot_password_screen.dart`.
-- **Improved Login Error Handling:** Implemented user-friendly error messages for different login failure scenarios.
-- **`undefined_method`:** Fixed in `api_response.dart` by adding the `error` factory constructor.
+## 6. Blockchain display
+
+The block detail screen displays:
+
+- proposer node (`node-A`, `node-B`, `node-C`, or `node-D`);
+- block date and changes;
+- proposer signature over the block hash;
+- the validator COMMIT signature certificate;
+- current and previous block hashes.
+
+PREPARE signatures are internal consensus messages and are not displayed or
+persisted in the public block representation.
+
+## 7. Backend integration
+
+Important endpoints:
+
+- `POST /api/v1/auth/login`
+- `POST /api/v1/chain/add_transaction`
+- `POST /api/v1/chain/transaction_status`
+- `POST /api/v1/chain/user_transactions`
+- `POST /api/v1/chain/blockchain_sync`
+- `GET /api/v1/chain/history`
+
+The client must use `blockchain_sync`; `check_chain_sync` is obsolete.
+
+## 8. Validation
+
+From `Client/`:
+
+```bash
+dart format --output=none lib
+dart analyze
+flutter test
+```
+
+Hot reload/restart requires an active Flutter debug application connected to
+the Dart Tooling Daemon.
