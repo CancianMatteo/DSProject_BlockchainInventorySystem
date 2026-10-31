@@ -112,6 +112,9 @@ defmodule InventoryNode.ConsensusEngine do
   @impl true
   def handle_info(message, state) do
     case message do
+      :initialize_from_python ->
+        handle_info_initialize_from_python(state)
+
       :round_timeout ->
         handle_info_round_timeout(state)
 
@@ -263,8 +266,7 @@ defmodule InventoryNode.ConsensusEngine do
     new_state
   end
 
-  @impl true
-  def handle_info(:initialize_from_python, state) do
+  defp handle_info_initialize_from_python(state) do
     case send_to_python_service(%{"flag" => "chain_state"}, state.python_host, state.python_port) do
       {:ok, %{"next_height" => height}} when is_integer(height) and height > 0 ->
         Logger.info("Altezza iniziale sincronizzata con Python: #{height}")
@@ -288,7 +290,8 @@ defmodule InventoryNode.ConsensusEngine do
              pending_count > 0 do
     cond do
       proposer_for(state, state.current_height, state.current_round) != state.node_id ->
-        {:reply, %{"accepted" => false, "status" => "not_proposer"}, state}
+        broadcast_to_all(state.peers, {:trigger_block})
+        {:reply, %{"accepted" => false, "status" => "relayed"}, state}
 
       state.commit_started or state.round_change_started or is_map(state.pending_block) ->
         {:reply, %{"accepted" => false, "status" => "busy"}, state}
@@ -319,43 +322,6 @@ defmodule InventoryNode.ConsensusEngine do
   def handle_call({:proposal_request, _reason, _pending_count}, _from, state) do
     {:reply, %{"accepted" => false, "status" => "invalid_request"}, state}
   end
-
-  @impl true
-  def handle_info({:round_timeout, token}, %{timeout_token: token} = state) do
-    if state.commit_started do
-      Logger.warning(
-        "COMMIT del blocco #{state.current_height} ancora in corso; attendo il quorum invece di cambiare round."
-      )
-
-      {:noreply, schedule_round_timeout(state)}
-    else
-      target_round = state.current_round + 1
-
-      Logger.warning(
-        "Timeout blocco #{state.current_height}. Avvio fase ROUND_CHANGE verso il round #{target_round}"
-      )
-
-      payload = %{
-        "flag" => "round_change",
-        "reason" => "timeout",
-        "height" => state.current_height,
-        "target_round" => target_round,
-        "validator_id" => state.node_id
-      }
-
-      case send_to_python_service(payload, state.python_host, state.python_port) do
-        {:ok, %{"signature" => signature} = signed_payload} when is_binary(signature) ->
-          broadcast_to_all(state.peers, {:round_change, signed_payload})
-
-        other ->
-          Logger.error("Impossibile firmare ROUND_CHANGE per timeout: #{inspect(other)}")
-      end
-
-      {:noreply, %{state | round_change_started: true}}
-    end
-  end
-
-  def handle_info({:round_timeout, _stale_token}, state), do: {:noreply, state}
 
   # ROUND CHANGE
 
@@ -415,13 +381,18 @@ defmodule InventoryNode.ConsensusEngine do
   # FASE 1: PRE-PREPARE (proposta del leader)
 
   defp handle_cast_trigger_block(state) do
-    proposer_index = rem(state.current_height + state.current_round, length(state.validators))
-    current_proposer = Enum.at(state.validators, proposer_index)
-
-    if current_proposer == state.node_id and is_nil(state.pending_block) do
-      {:noreply, propose_block(state)}
-    else
+    if not is_integer(state.current_height) do
+      Logger.debug("Ignoro trigger_block: altezza non ancora sincronizzata")
       {:noreply, state}
+    else
+      proposer_index = rem(state.current_height + state.current_round, length(state.validators))
+      current_proposer = Enum.at(state.validators, proposer_index)
+
+      if current_proposer == state.node_id and is_nil(state.pending_block) do
+        {:noreply, propose_block(state)}
+      else
+        {:noreply, state}
+      end
     end
   end
 
@@ -946,7 +917,14 @@ defmodule InventoryNode.ConsensusEngine do
     write_payload = %{
       "flag" => "write_block",
       "height" => height,
-      "block_data" => state.pending_block
+      "block_data" =>
+        state.pending_block
+        |> Map.put("proposer_id", proposer_for(state, height, state.pending_block["round"]))
+        |> Map.put("proposer_sign", state.temporary_signature)
+        |> Map.put(
+          "validator_signatures",
+          %{"commit" => state.commit_votes}
+        )
     }
 
     case send_to_python_service(write_payload, state.python_host, state.python_port) do

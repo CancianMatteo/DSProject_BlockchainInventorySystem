@@ -56,12 +56,12 @@ class _InventoryListItemState extends State<InventoryListItem> {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
       child: Row(
         children: [
           // Quantity
           Container(
-            width: 40,
+            width: 52,
             alignment: Alignment.center,
             child: Text(
               widget.initialQuantity.toString(),
@@ -76,7 +76,7 @@ class _InventoryListItemState extends State<InventoryListItem> {
               ),
             ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 8),
           // Item Name and Type
           Expanded(
             child: Column(
@@ -98,10 +98,10 @@ class _InventoryListItemState extends State<InventoryListItem> {
             ),
           ),
           // Spacer to push controls to the right
-          const Spacer(),
+          const SizedBox(width: 8),
           // Quantity Change Controls
           SizedBox(
-            width: 50,
+            width: 48,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [

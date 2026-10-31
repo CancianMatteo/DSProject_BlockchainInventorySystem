@@ -20,6 +20,25 @@ class BlockDetailScreen extends StatelessWidget {
     return lines.join('\n');
   }
 
+  String _displayNode(String nodeId) {
+    final normalized = nodeId.replaceAll('_', '-');
+    final match = RegExp(r'^node-([a-z])$').firstMatch(normalized);
+    return match == null
+        ? normalized
+        : 'node-${match.group(1)!.toUpperCase()}';
+  }
+
+  String _formatValidatorSignatures(Block b) {
+    if (b.validatorSignatures.isEmpty) return 'Nessuna firma disponibile';
+    final lines = <String>[];
+    final raw = b.validatorSignatures['commit'];
+    if (raw is! Map) return 'Nessuna firma disponibile';
+    for (final entry in raw.entries) {
+      lines.add('COMMIT ${_displayNode(entry.key.toString())}: ${entry.value}');
+    }
+    return lines.isEmpty ? 'Nessuna firma disponibile' : lines.join('\n');
+  }
+
   @override
   Widget build(BuildContext context) {
     final data = block;
@@ -42,20 +61,20 @@ class BlockDetailScreen extends StatelessWidget {
               padding: const EdgeInsets.all(16.0),
               child: ListView(
                 children: [
-                  _buildDetailCard('Autore', data.authorEmail),
+                  _buildDetailCard('Autore', _displayNode(data.proposerId)),
                   _buildDetailCard(
                     'Data e Ora',
                     data.datetime.toLocal().toString(),
                   ),
                   _buildDetailCard('Modifiche', _formatChanges(data)),
                   _buildDetailCard(
-                    'Firma Autore',
-                    data.authorSign ?? 'N/A',
+                    'Firma Autore (proposer)',
+                    data.proposerSignature ?? 'N/A',
                     isCode: true,
                   ),
                   _buildDetailCard(
-                    'Firma Server',
-                    data.serverSign,
+                    'Firma validatori',
+                    _formatValidatorSignatures(data),
                     isCode: true,
                   ),
                   _buildDetailCard('Hash Blocco', data.blockHash, isCode: true),

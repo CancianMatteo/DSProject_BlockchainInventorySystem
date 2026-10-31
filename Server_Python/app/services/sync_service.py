@@ -2,8 +2,20 @@ import json
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db import repositories
 from app.services.cache_service import inventory_cache
+
+
+def _fallback_proposer_id(block_number: int) -> str:
+    try:
+        validators = json.loads(settings.validator_public_keys)
+    except (TypeError, json.JSONDecodeError):
+        validators = {}
+    if not isinstance(validators, dict) or not validators:
+        return "distributed-node"
+    ordered = sorted(str(node_id) for node_id in validators)
+    return ordered[block_number % len(ordered)]
 
 
 def serialize_block(db: Session, block) -> dict:
@@ -16,6 +28,25 @@ def serialize_block(db: Session, block) -> dict:
         changes = raw_payload
         item_catalog = {}
         transactions = []
+    proposer_id = (
+        raw_payload.get("proposer_id")
+        or (
+            block.author_email
+            if block.author_email != "distributed-node"
+            else _fallback_proposer_id(block.n_block)
+        )
+    )
+    proposer_signature = raw_payload.get("proposer_signature") or block.author_sign
+    votes = repositories.get_block_votes_for_hash(db, block.block_hash)
+    raw_validator_signatures = raw_payload.get("validator_signatures", {})
+    commit_signatures = (
+        raw_validator_signatures.get("commit")
+        if isinstance(raw_validator_signatures, dict)
+        else None
+    )
+    if not isinstance(commit_signatures, dict) or not commit_signatures:
+        commit_signatures = {vote.validator_id: vote.signature for vote in votes}
+    validator_signatures = {"commit": commit_signatures} if commit_signatures else {}
 
     serialized = {
         "n_block": block.n_block,
@@ -24,9 +55,12 @@ def serialize_block(db: Session, block) -> dict:
         "datetime": block.datetime,
         "changes": changes,
         "item_catalog": item_catalog,
-        "author_email": block.author_email,
-        "author_sign": block.author_sign,
-        "server_sign": None if block.server_sign == "validator-quorum" else block.server_sign,
+        "author_email": proposer_id,
+        "author_sign": proposer_signature,
+        "proposer_id": proposer_id,
+        "proposer_signature": proposer_signature,
+        "validator_signatures": validator_signatures,
+        "server_sign": None,
         "transactions": transactions,
         "votes": [
             {
@@ -36,7 +70,7 @@ def serialize_block(db: Session, block) -> dict:
                 "validator_id": vote.validator_id,
                 "signature": vote.signature,
             }
-            for vote in repositories.get_block_votes_for_hash(db, block.block_hash)
+            for vote in votes
         ],
     }
     return serialized

@@ -504,12 +504,15 @@ def _store_block(
                 "changes": changes,
                 "item_catalog": catalog,
                 "transactions": block["transactions"],
+                "proposer_id": block.get("proposer_id", block.get("proposer")),
+                "proposer_signature": block.get("proposer_sign"),
+                "validator_signatures": block.get("validator_signatures", {}),
             },
             sort_keys=True,
         ),
-        author_email=str(block.get("proposer", "distributed-node")),
-        author_sign=None,
-        server_sign="validator-quorum",
+        author_email=str(block.get("proposer_id", block.get("proposer", "distributed-node"))),
+        author_sign=block.get("proposer_sign"),
+        server_sign="",
     )
     db.add(row)
     db.flush()
@@ -1096,6 +1099,17 @@ def write_committed_block(db: Session, block: Any) -> dict[str, Any]:
     transactions = block.get("transactions")
     if not isinstance(transactions, list) or not transactions:
         raise DistributedReject("Committed block must contain transactions")
+    if not isinstance(block.get("proposer_id"), str) or not block["proposer_id"]:
+        raise DistributedReject("Committed block is missing proposer_id")
+    if not isinstance(block.get("proposer_sign"), str) or not block["proposer_sign"]:
+        raise DistributedReject("Committed block is missing proposer signature")
+    validator_signatures = block.get("validator_signatures")
+    if (
+        not isinstance(validator_signatures, dict)
+        or not isinstance(validator_signatures.get("commit"), dict)
+        or not validator_signatures["commit"]
+    ):
+        raise DistributedReject("Committed block is missing validator signatures")
     if not isinstance(block.get("block_hash"), str) or _compute_block_hash(block) != block["block_hash"]:
         raise DistributedReject("Committed block hash is invalid")
 

@@ -63,14 +63,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     for (final block in allBlocks) {
       if (block is! Map<String, dynamic>) continue;
-      final authorEmail = (block['author_email'] ?? '').toString();
-      final isMine = authorEmail == currentEmail;
+      final rawTransactions = block['transactions'];
+      if (rawTransactions is! List) continue;
 
-      final rawChanges = block['changes'];
-      if (rawChanges is! Map) continue;
-
-      for (final entry in rawChanges.entries) {
-        final delta = (entry.value as num?)?.toInt() ?? 0;
+      for (final rawTransaction in rawTransactions) {
+        if (rawTransaction is! Map) continue;
+        final clientId =
+            (rawTransaction['client_ID'] ?? rawTransaction['from_node'] ?? '')
+                .toString();
+        final isMine = clientId == currentEmail;
+        final delta = (rawTransaction['quantity'] as num?)?.toInt() ?? 0;
         if (delta == 0) continue;
 
         totalChanges += 1;
