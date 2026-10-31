@@ -30,6 +30,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     if (token == null) return;
     final response = await _apiService.getUserTransactions(token);
     if (!mounted) return;
+    if (response.ok) {
+      context.read<PendingTransactionCache>().reconcileRemoteTransactions(
+        response.data ?? <Map<String, dynamic>>[],
+      );
+    }
     setState(() {
       _loading = false;
       _error = response.ok ? null : response.errorMessage;

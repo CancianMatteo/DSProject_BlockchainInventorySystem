@@ -47,12 +47,24 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     try {
       final apiService = ApiService();
+      final sessionToken = context.read<AuthProvider>().sessionToken;
+      final pendingCache = context.read<PendingTransactionCache>();
       final response = await apiService.blockchainSync(
         forceFullSync ? '' : (_prevBlockHash ?? '0'),
       );
 
       if (response.ok) {
         final data = response.data!;
+        if (sessionToken != null) {
+          final transactionResponse = await apiService.getUserTransactions(
+            sessionToken,
+          );
+          if (transactionResponse.ok && mounted) {
+            pendingCache.reconcileRemoteTransactions(
+              transactionResponse.data ?? <Map<String, dynamic>>[],
+            );
+          }
+        }
         final List<dynamic> inventoryData = data['inventory'];
         setState(() {
           _inventoryItems = inventoryData
@@ -78,11 +90,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
         );
       }
 
-      void _applyPendingOverlay() {
+      void applyPendingOverlay() {
         final itemsById = {for (final item in _inventoryItems) item.id: item};
         final deltas = <String, int>{};
         for (final pending
-            in context.read<PendingTransactionCache>().transactions) {
+            in pendingCache.transactions) {
           final transaction = pending.transaction;
           final itemId = transaction['item_id']?.toString();
           final quantity = transaction['quantity'];
@@ -119,7 +131,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         }).toList();
       }
 
-      _applyPendingOverlay();
+      applyPendingOverlay();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
