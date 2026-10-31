@@ -507,12 +507,15 @@ def _store_block(
                 "changes": changes,
                 "item_catalog": catalog,
                 "transactions": block["transactions"],
+                "proposer_id": block.get("proposer_id", block.get("proposer")),
+                "proposer_signature": block.get("proposer_sign"),
+                "validator_signatures": block.get("validator_signatures", {}),
             },
             sort_keys=True,
         ),
-        author_email=str(proposer_id or block.get("proposer", "distributed-node")),
-        author_sign=proposer_signature,
-        server_sign="validator-quorum",
+        author_email=str(block.get("proposer_id", block.get("proposer", "distributed-node"))),
+        author_sign=block.get("proposer_sign"),
+        server_sign="",
     )
     db.add(row)
     db.flush()
@@ -592,6 +595,38 @@ def transaction_status(db: Session, trans_id: str) -> dict[str, Any]:
     if trans_id in _transactions_in_chain(db):
         return {"trans_id": trans_id, "status": "finalized"}
     return {"trans_id": trans_id, "status": "unknown"}
+
+
+def user_transactions(db: Session, client_id: str) -> list[dict[str, Any]]:
+    transactions: dict[str, dict[str, Any]] = {}
+    for row in repositories.get_pending_transactions(db):
+        transaction = json.loads(row.transaction_json)
+        if transaction.get("client_ID", transaction.get("from_node")) == client_id:
+            transactions[row.trans_id] = {
+                **transaction,
+                "status": row.status,
+                "forwarding_status": forwarding_status(db, row.trans_id),
+            }
+    for block in repositories.get_all_blocks(db):
+        payload = json.loads(block.changes_json)
+        block_transactions = payload.get("transactions", []) if isinstance(payload, dict) else []
+        for transaction in block_transactions:
+            if not isinstance(transaction, dict):
+                continue
+            if transaction.get("client_ID", transaction.get("from_node")) != client_id:
+                continue
+            trans_id = _transaction_id(transaction)
+            transactions[trans_id] = {
+                **transaction,
+                "status": "finalized",
+                "block_number": block.n_block,
+                "forwarding_status": forwarding_status(db, trans_id),
+            }
+    return sorted(
+        transactions.values(),
+        key=lambda transaction: transaction.get("timestamp", ""),
+        reverse=True,
+    )
 
 
 def forwarding_status(db: Session, trans_id: str) -> str:
@@ -1134,6 +1169,17 @@ def write_committed_block(
     transactions = block.get("transactions")
     if not isinstance(transactions, list) or not transactions:
         raise DistributedReject("Committed block must contain transactions")
+    if not isinstance(block.get("proposer_id"), str) or not block["proposer_id"]:
+        raise DistributedReject("Committed block is missing proposer_id")
+    if not isinstance(block.get("proposer_sign"), str) or not block["proposer_sign"]:
+        raise DistributedReject("Committed block is missing proposer signature")
+    validator_signatures = block.get("validator_signatures")
+    if (
+        not isinstance(validator_signatures, dict)
+        or not isinstance(validator_signatures.get("commit"), dict)
+        or not validator_signatures["commit"]
+    ):
+        raise DistributedReject("Committed block is missing validator signatures")
     if not isinstance(block.get("block_hash"), str) or _compute_block_hash(block) != block["block_hash"]:
         raise DistributedReject("Committed block hash is invalid")
     proposal_payload = {

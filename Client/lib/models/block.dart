@@ -8,6 +8,9 @@ class Block {
   final String authorEmail;
   final String? authorSign;
   final String serverSign;
+  final String proposerId;
+  final String? proposerSignature;
+  final Map<String, dynamic> validatorSignatures;
 
   Block({
     required this.nBlock,
@@ -19,6 +22,9 @@ class Block {
     required this.authorEmail,
     required this.authorSign,
     required this.serverSign,
+    required this.proposerId,
+    required this.proposerSignature,
+    required this.validatorSignatures,
   });
 
   factory Block.fromJson(Map<String, dynamic> json) {
@@ -34,6 +40,12 @@ class Block {
       authorEmail: json['author_email'].toString(),
       authorSign: json['author_sign']?.toString(),
       serverSign: json['server_sign'].toString(),
+      proposerId: (json['proposer_id'] ?? json['author_email']).toString(),
+      proposerSignature:
+          (json['proposer_signature'] ?? json['author_sign'])?.toString(),
+      validatorSignatures: Map<String, dynamic>.from(
+        json['validator_signatures'] ?? <String, dynamic>{},
+      ),
     );
   }
 }

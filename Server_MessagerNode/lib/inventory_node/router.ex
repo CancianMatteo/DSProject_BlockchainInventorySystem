@@ -68,6 +68,9 @@ defmodule InventoryNode.Router do
       %{"flag" => "trigger_block"} ->
         GenServer.cast(InventoryNode.ConsensusEngine, :trigger_block)
 
+      {:trigger_block} ->
+        GenServer.cast(InventoryNode.ConsensusEngine, :trigger_block)
+
       # TRANSACTION OPERATION
       %{"flag" => "transaction"} = transaction ->
         IO.puts(

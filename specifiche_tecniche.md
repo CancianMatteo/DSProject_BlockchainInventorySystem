@@ -138,9 +138,9 @@ valida, Elixir ritenta e non avvia i round finché non ha uno stato valido.
    Python di preparare il blocco.
 3. Python costruisce il blocco dalla mempool, lo firma come proposer e
    restituisce blocco e firma.
-4. Prima di inviare la proposta, il proposer chiede a Python anche la propria
-   firma PREPARE. Poi invia il messaggio `pre_prepare` a tutti i peer e conserva
-   la firma PREPARE locale.
+4. Prima di inviare la proposta, il proposer chiede a Python la propria firma
+   PREPARE per partecipare al quorum interno. Poi invia il messaggio
+   `pre_prepare` a tutti i peer.
 5. Ogni nodo chiede a Python di verificare hash, firma del proposer e scelta
    deterministica del proposer. Se la proposta è valida, firma PREPARE e
    invia il voto **unicast** al proposer.
@@ -164,6 +164,11 @@ Ogni voto COMMIT include anche la proposta firmata e il certificato PREPARE, cos
 Un nodo scrive il blocco solo quando ha raccolto almeno `2f + 1` voti COMMIT distinti e validi per lo stesso blocco. La scrittura avviene localmente su Python; il nodo avanza all'altezza successiva solo dopo la risposta positiva di `write_block`. Non è sufficiente ricevere la `commit_proposal` o il quorum PREPARE.
 
 Una volta iniziata la votazione COMMIT, un timeout non cancella la proposta né avvia un round incompatibile: il nodo continua ad attendere i voti, secondo l'ipotesi di consegna eventuale dei messaggi. Il `ROUND_CHANGE` per timeout si usa quando la fase COMMIT non è ancora iniziata.
+
+Le firme PREPARE restano necessarie per il quorum interno, ma non fanno parte
+del certificato persistito o mostrato al client. Dopo il quorum COMMIT, il
+payload `write_block` contiene soltanto la firma del proposer e la mappa
+`validator_signatures.commit`, cioè le firme COMMIT dei validatori distinti.
 
 ### 4. ROUND_CHANGE
 

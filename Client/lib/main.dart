@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:distr_bis/auth/auth_provider.dart';
 import 'package:distr_bis/notifications/notification_provider.dart';
 import 'package:distr_bis/router.dart';
+import 'package:distr_bis/transactions/pending_transaction_cache.dart';
 import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
 
@@ -20,10 +21,14 @@ class MyApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (context) => AuthProvider()),
         ChangeNotifierProvider(create: (context) => NotificationProvider()),
+        ChangeNotifierProvider(create: (context) => PendingTransactionCache()),
       ],
       child: Builder(
         builder: (context) {
-          final authProvider = Provider.of<AuthProvider>(context, listen: false);
+          final authProvider = Provider.of<AuthProvider>(
+            context,
+            listen: false,
+          );
           final router = AppRouter(authProvider: authProvider).router;
 
           return MaterialApp.router(

@@ -17,7 +17,7 @@ class _ChainLogScreenState extends State<ChainLogScreen> {
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final ApiService _apiService = ApiService();
-  bool _isLoading = true;
+  bool _isLoading = false;
   bool _isLoadingMore = false;
   bool _hasMore = true;
   int? _nextBeforeNBlock;
@@ -191,7 +191,7 @@ class _ChainLogScreenState extends State<ChainLogScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Transaction history'),
+        title: const Text('Blockchain'),
         centerTitle: true,
         actions: [
           IconButton(
@@ -266,7 +266,7 @@ class _ChainLogScreenState extends State<ChainLogScreen> {
                       isThreeLine: true,
                       onTap: () => GoRouter.of(
                         context,
-                      ).go('/chain-log/${block.nBlock}', extra: block),
+                      ).go('/blockchain/${block.nBlock}', extra: block),
                     ),
                   );
                 },

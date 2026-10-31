@@ -21,7 +21,7 @@
 
 \title{\textbf{Distributed Systems Project: \\ Permissioned Blockchain Inventory System}}
 \author{\textbf{Cancian Matteo} \quad \and \quad \textbf{Del Pio Luogo Marco}}
-\date{Version 0.4 --- \today}
+\date{Version 1.0 --- \today}
 
 \begin{document}
 
@@ -68,7 +68,11 @@ The system relies on two primary node types:
     \item \textbf{Client/Operator Nodes:} User-facing client terminals (web frontends or handheld devices) utilized by warehouse staff. Client nodes do not participate in block generation; instead, they sign transactions locally and submit them to validator nodes via API endpoints.
 \end{enumerate}
 
-By storing item movements as cryptographically signed transaction logs linked through cryptographic hashes ($H(B_n) = \text{Hash}(B_{n-1} \parallel T_n \parallel \text{nonce})$), the system ensures strict sequential ordering, immutability, and full accountability. 
+By storing item movements as cryptographically signed transaction logs linked
+through cryptographic hashes, the system ensures strict sequential ordering,
+immutability, and full accountability. In the implementation,
+$H(B_n)$ is the SHA-256 digest of the canonical block fields
+$(\text{height},\text{prev\_block\_hash},\text{transactions})$.
 
 In this project, we omitted the implementation of \textbf{strong authentication methods} for the 'operator'. We therefore assume that transactions are authentically signed by the operators, making it impossible for a Byzantine node to alter them. 
 
@@ -156,7 +160,10 @@ In this chapter, we outline the functional and non-functional requirements for t
 
 \begin{description}
     \item[\textbf{NFR-1: Security \& Cryptographic Integrity}]
-    All client-to-node and node-to-node communications must be encrypted securely. Transactions must be signed using quantum-resistant algorithms. Blocks are cryptographically linked using SHA-256 hash digests.
+    The demo uses plain HTTP for client-to-Python and Python-to-Elixir
+    communication. HTTPS and authenticated inter-site transport are future
+    hardening measures. Transactions use Ed25519 signatures and blocks are
+    cryptographically linked using SHA-256 hash digests.
 
     \item[\textbf{NFR-2: Availability \& Fault Tolerance}]
     For Byzantine fault tolerance, the validator configuration must satisfy $n \ge 3f + 1$. This project configures $N=4$ validators and assumes at most $f=1$ faulty validator. A block requires a quorum of $2f+1=3$ distinct validator signatures; progress therefore requires at least $N/2+1=3$ healthy validators and an available proposer for the current round.
@@ -165,7 +172,10 @@ In this chapter, we outline the functional and non-functional requirements for t
     The distributed ledger must deliver deterministic block finality (zero fork probability once a block is confirmed by a majority of validators), ensuring immediate consistency across all warehouse locations.
 
     \item[\textbf{NFR-4: Performance \& Throughput}]
-    The system must process a minimum of 10 transactions per second, with block creation intervals set below 1 minutes (for pending transactions), ensuring operational responsiveness for warehouse operators.
+    Transactions are collected in blocks of at most 500 entries. Python
+    triggers a proposal at the configured mempool threshold or after the
+    configured idle interval while transactions are pending. The Elixir round
+    timeout is a consensus timeout, not a block-creation interval.
 
     \item[\textbf{NFR-5: Auditability \& Transparency}]
     The full history of all operations must be verifiable by any validator node (and thus by operators) without relying on a centralized central authority.
@@ -239,11 +249,11 @@ The step-by-step operational flow for inventory updates is illustrated in Figure
 \end{figure}
 
 \begin{enumerate}
-    \item \textbf{Submission:} Client node drafts transaction $T = \langle \text{Type}, \text{AssetID}, \text{Qty}, \text{Timestamp}, \text{Sig}_{\text{Op}} \rangle$ and sends it to $\text{Server}_X$.
-    \item \textbf{Broadcast \& Pooling:} $\text{Server}_X$ validates $\text{Sig}_{\text{Op}}$, checks local inventory constraints, and broadcasts $T$ to peer nodes ($\text{Server}_Y, \text{Server}_Z$).
-    \item \textbf{Block Assembly:} The round leader collects pending transactions from its mempool into block candidate $B_k = \langle k, \text{Hash}(B_{k-1}), \{T_1, \dots, T_m\}, \text{Sig}_{\text{Leader}} \rangle$.
-    \item \textbf{Consensus Vote:} The leader broadcasts $B_k$. Peers verify signatures, hash chain continuity, and contained transactions. If valid, peers return a pre-commit vote.
-    \item \textbf{Commit \& State Update:} Upon gathering a supermajority of valid votes ($> 2/3$), nodes commit $B_k$ to disk, update the local inventory state, and send a confirmation receipt back to the client. Pending transactions are resent to the round leader in case the message is lost.
+    \item \textbf{Submission:} The client sends an Ed25519-signed transaction containing \texttt{item\_id}, signed \texttt{quantity}, \texttt{location}, \texttt{client\_ID}, \texttt{client\_public\_key}, \texttt{trans\_id}, \texttt{timestamp}, and \texttt{item\_catalog} to one Python validator. Positive quantities add stock; negative quantities remove stock.
+    \item \textbf{Broadcast \& Pooling:} The receiving Python validator validates and stores the transaction, then forwards it through its co-located Elixir node. A validator receiving it from Elixir stores it without forwarding it again.
+    \item \textbf{Block Assembly:} The deterministic proposer collects pending transactions into a block candidate containing height, round, previous block hash, transactions, and the block hash, then signs the proposer payload.
+    \item \textbf{Consensus Vote:} The proposer broadcasts PRE-PREPARE. Peers verify the proposal and participate in PREPARE and COMMIT voting. Prepare signatures are protocol-internal; three distinct valid COMMIT signatures form the final certificate.
+    \item \textbf{Commit \& State Update:} Each Python validator writes the block only after the COMMIT quorum, updates its inventory cache, and marks included transactions as \texttt{finalized}. The client observes this through transaction-status polling and blockchain synchronization; there is no separate leader-to-client broadcast.
 \end{enumerate}
 
 \subsection{Error Remediation Protocol}
@@ -266,8 +276,11 @@ When a server crashes and recovers, it must synchronize its mempool and blockcha
 The physical deployment model relies on containerized microservices (Docker) across distributed sites:
 \begin{itemize}
     \item Each regional warehouse hosts a local validator container divided in two components: The blockchain module and the networking module. 
-    \item Client devices connect via secure REST endpoints exposed by local API gateways.
-    \item Peer-to-peer (P2P) communication among validator containers uses encrypted TCP channels over enterprise VPN tunnels.
+    \item Client devices connect via HTTP REST endpoints exposed by the Python
+    API. HTTPS is not enabled in the demo.
+    \item Peer-to-peer communication among validator containers uses the
+    internal Erlang-term TCP listener on port 4000; authenticated encryption
+    and VPN integration are future deployment work.
 \end{itemize}
 
 \section{Development Plan}
@@ -298,12 +311,84 @@ To manage implementation risk, development is divided into three incremental tie
 
 
 \chapter{Implementation}\label{ch:implementation}
-\textit{[Implementation details regarding platform selection, specific data structures, middleware bindings, and codebase organization will be detailed here in future revisions.]}
+
+\section{Software Components}
+The Flutter client uses \texttt{go\_router} and Provider for routing and state
+management. It signs transactions locally and calls the Python API. Each
+Python validator uses FastAPI, SQLAlchemy, and SQLite. The chain, pending
+transactions, forwarding queue, and validator vote records are persisted in
+SQLite; the inventory cache is rebuildable from committed blocks. Each Elixir
+node contains the HTTP bridge, the Erlang-term cluster listener, the router,
+and the consensus engine.
+
+\section{Persisted Block Certificate}
+The public block representation contains the proposer identifier and signature
+plus the COMMIT signatures of the validators:
+\begin{verbatim}
+proposer_id, proposer_signature, validator_signatures.commit
+\end{verbatim}
+PREPARE signatures are used to authorize the COMMIT phase but are not
+persisted or displayed to clients.
+
+\section{Client Consistency}
+The client keeps an in-memory cache for transactions submitted by the current
+user. Before applying pending inventory overlays, it reconciles this cache
+with the authoritative \texttt{/user\_transactions} response. Finalized or
+rejected transactions are removed from the cache, preventing a committed
+quantity from being applied twice.
 
 
 
 \chapter{Validation}\label{ch:validation}
-\textit{[Performance benchmarks, TPS throughput graphs, fault tolerance simulation results, and UI screenshots validating the requirements of Chapter~\ref{ch:analysis} will be presented here.]}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.75\textwidth]{images/blockchain.jpg}
+    \caption{Blockchain network visualization.}
+    \label{fig:blockchain}
+\end{figure}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.75\textwidth]{images/transactions.jpg}
+    \caption{Transaction flow in the blockchain system.}
+    \label{fig:transactions}
+\end{figure}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.75\textwidth]{images/block_details.jpg}
+    \caption{Block details and structure.}
+    \label{fig:block_details}
+\end{figure}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.75\textwidth]{images/profile.jpg}
+    \caption{Operator profile/dashboard.}
+    \label{fig:profile}
+\end{figure}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.75\textwidth]{images/inventory.jpg}
+    \caption{Main screen with items and quantities.}
+    \label{fig:inventory}
+\end{figure}
+
+\section{Automated Validation}
+The repository includes Flutter widget tests, Elixir ExUnit tests, and Python
+service tests. The validation workflow also runs Dart analysis, Elixir
+formatting checks, Python compilation, and Docker health checks.
+
+\section{Integration and Load Validation}
+The load-test script submits signed transactions through an Elixir router and
+waits for committed blocks. Since a block contains at most 500 transactions,
+larger runs require multiple blocks. The API exposes chain history,
+blockchain synchronization, pending transactions, transaction status, and
+forwarding-monitor endpoints for operational verification.
+
+\section{Fault Injection}
+The deployment supports test modes for invalid signatures, split-brain
+behaviour, equivocation, and an unavailable leader. These modes are intended
+for controlled demonstrations. With four validators, the normal quorum is
+three; safety assumes at most one Byzantine validator, while availability
+also depends on the selected proposer and network connectivity.
 
 
 
@@ -350,10 +435,24 @@ Other future work includes testing proposer timeouts and recovery, validating
 certificate propagation under message loss and reordering, and binding
 operator public keys to authenticated BIS accounts.
 
+Additional improvements include timestamp-age validation, an optional
+nonce/replay cache, persistent pending-cache storage, forwarding metrics and
+alerts, HTTPS, and authenticated inter-site transport.
+
 
 
 \appendix
 \chapter{Source Code and Setup Instructions}\label{ch:appendix}
-\textit{[Build instructions, environment configuration scripts, snapshot images and key code snippets.]}
+
+The local deployment requires Docker Compose, Python 3, and OpenSSL. From the
+repository root:
+\begin{verbatim}
+python3 setup_env.py
+docker compose up -d --build
+\end{verbatim}
+The Python APIs are published locally on ports 8001--8004 for nodes A--D.
+Elixir gossip uses internal port 4000 and its Python bridge uses internal port
+6000. The complete endpoint map is maintained in \texttt{PORTS.md}; protocol
+details are maintained in \texttt{specifiche\_tecniche.md}.
 
 \end{document}

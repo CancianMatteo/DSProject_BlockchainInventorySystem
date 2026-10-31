@@ -1,0 +1,238 @@
+\documentclass[11pt,a4paper]{memoir}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}
+\lstset{basicstyle=\ttfamily\small,breaklines=true,columns=fullflexible}
+
+\title{\textbf{Distributed Systems Project:\\Permissioned Blockchain Inventory System}}
+\author{\textbf{Cancian Matteo} \and \textbf{Del Pio Luogo Marco}}
+\date{Version 2.0 --- \today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This project implements a permissioned inventory ledger composed of a Flutter
+client, four Python validator services, and four Elixir consensus processes.
+Clients submit Ed25519-signed inventory transactions to one validator. Python
+services validate and store transactions in a SQLite-backed mempool, while
+Elixir nodes disseminate proposals and execute a leader-based PoA/BFT
+protocol. A block is committed after a quorum of three validators has signed
+the same block hash. The client distinguishes committed inventory from local
+pending overlays and exposes transaction status, blockchain history, and
+block signatures.
+\end{abstract}
+
+\tableofcontents
+\clearpage
+
+\chapter{System Overview}
+
+\section{Goals}
+The system provides an auditable inventory ledger for four known validator
+nodes. Inventory movements are represented by signed transactions and are
+never edited after commitment. An incorrect movement is corrected by a new
+compensating movement, not by deleting the original record.
+
+\section{Implemented Architecture}
+Each logical validator consists of:
+\begin{itemize}
+  \item a Python/FastAPI service for authentication, transaction validation,
+        SQLite persistence, inventory state, and the HTTP API;
+  \item an Elixir service for validator gossip, proposer selection, and
+        consensus message handling.
+\end{itemize}
+The Flutter application is a client only: it does not participate in
+consensus and does not decide whether a transaction is committed.
+
+\begin{table}[htbp]
+\centering
+\caption{Local deployment ports}
+\begin{tabular}{lll}
+\toprule
+\textbf{Component} & \textbf{Container port} & \textbf{Local host mapping}\\
+\midrule
+Python API & 8000/HTTP & 8001--8004\\
+Elixir cluster gossip & 4000/TCP & internal Docker network\\
+Elixir HTTP bridge & 6000/HTTP & internal Docker network\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The demo intentionally uses HTTP rather than HTTPS. HTTPS, certificate
+management, and encrypted inter-site transport are deployment hardening tasks,
+not guarantees of the current demo.
+
+\chapter{Transaction Protocol}
+
+\section{Transaction Contract}
+The client sends the following logical fields to
+\texttt{POST /api/v1/chain/add\_transaction}:
+\begin{lstlisting}
+{
+  "item_id": "...",
+  "quantity": 2,
+  "location": "...",
+  "client_ID": "...",
+  "client_public_key": "...",
+  "trans_id": "...",
+  "timestamp": "...",
+  "item_catalog": {...},
+  "signature": "..."
+}
+\end{lstlisting}
+\texttt{quantity} is a non-zero signed integer: positive values add stock and
+negative values remove stock. There is no \texttt{tx\_type}. The client signs
+the canonical JSON payload containing the transaction fields, including its
+public key; the transport-only \texttt{flag} is not signed.
+
+The first Python node verifies the authenticated user's identity and the
+client signature. It forwards a flat transaction to its Elixir counterpart
+with \texttt{flag=transaction}. A transaction received from another validator
+is validated and stored locally but is not forwarded again. The
+\texttt{trans\_id} primary key makes repeated delivery idempotent.
+
+\section{Mempool and Proposal Trigger}
+Every validator stores accepted transactions as \texttt{pending}. Python
+requests a proposal when the configured threshold is reached or when the
+configured idle interval elapses while pending transactions exist. The
+threshold and interval are operational settings; the Elixir round timeout is
+not an independent block-creation timer.
+
+The proposer is deterministic:
+\[
+  \mathrm{proposer} = \mathrm{validators}[
+  (\mathrm{height}+\mathrm{round}) \bmod N].
+\]
+With four validators, the commit quorum is three distinct valid validator
+votes. Each block contains at most the configured maximum number of
+transactions.
+
+\section{Consensus}
+The proposer asks Python to construct and sign a block containing height,
+round, previous hash, transactions, and block hash. The proposer signature
+covers the tuple \texttt{(height, round, proposer\_id, block\_hash)}.
+
+The Elixir nodes then execute:
+\begin{enumerate}
+  \item \textbf{PRE-PREPARE:} the proposer broadcasts the block and its
+        signature;
+  \item \textbf{PREPARE:} validators verify the proposal and exchange
+        validator votes; the proposer requires a prepare quorum before
+        opening the commit phase;
+  \item \textbf{COMMIT:} validators sign the block hash and broadcast commit
+        votes; a node writes the block only after receiving three valid
+        distinct commit votes;
+  \item \textbf{WRITE:} each Python validator persists the block, applies its
+        inventory changes, and marks included transactions as
+        \texttt{finalized}.
+\end{enumerate}
+
+Prepare votes are protocol-internal and are not persisted in the public block
+record. The committed block stores the proposer signature and the commit
+certificate:
+\begin{lstlisting}
+"proposer_id": "node_b",
+"proposer_signature": "...",
+"validator_signatures": {
+  "commit": {
+    "node_a": "...",
+    "node_b": "...",
+    "node_c": "..."
+  }
+}
+\end{lstlisting}
+
+If consensus cannot progress, a round timeout may produce signed
+\texttt{ROUND\_CHANGE} messages. Round change is subject to a quorum and does
+not erase a committed block. The current implementation does not guarantee
+automatic progress if the selected proposer remains unavailable in every
+round; this is a known limitation documented as future work.
+
+\chapter{Client Behaviour}
+
+\section{Committed State and Pending Overlay}
+The authoritative inventory is reconstructed from committed blocks. After a
+client submits a transaction, that client may see a clearly local pending
+overlay while the transaction is awaiting commitment. Other clients see only
+committed state.
+
+The Flutter client keeps pending transactions in an in-memory cache. On every
+inventory or transaction refresh it reconciles the cache with the authoritative
+\texttt{/user\_transactions} response. A transaction whose status is
+\texttt{finalized} or \texttt{rejected} is removed before the pending overlay
+is applied. This prevents a committed delta from being applied twice and
+prevents a stale pending card from remaining visible.
+
+\section{Client Screens}
+\begin{itemize}
+  \item \textbf{Inventario}: committed quantities plus the requester's pending
+        overlay;
+  \item \textbf{Transazioni}: the authenticated user's transactions and their
+        pending/finalized status;
+  \item \textbf{Blockchain}: committed blocks, proposer identity, changes, and
+        cryptographic signatures;
+  \item \textbf{Profilo}: account information and aggregate statistics based
+        on individual user transactions.
+\end{itemize}
+
+\chapter{Security and Fault Model}
+
+Validator identities and Ed25519 public keys are configured before startup.
+Private keys remain local to their validator. Client public-key trust is
+established by the first Python validator for this demo; all peers then use
+the public key carried by the transaction. Canonical JSON and Base64-encoded
+Ed25519 signatures are used for signed protocol payloads.
+
+The four-validator configuration is designed for at most one Byzantine
+validator, with $N=3f+1$ and a quorum of $2f+1=3$. This quorum argument
+protects safety under the stated assumptions; availability also depends on
+the selected proposer and network connectivity. The demo uses HTTP and a
+shared application token, so it must not be exposed as a production service
+without transport and secret-management hardening.
+
+\chapter{Validation}
+
+\section{Automated Checks}
+The repository includes Flutter widget tests, Python service tests, and
+Elixir ExUnit tests. Formatting, static analysis, and container health checks
+are part of the validation workflow.
+
+\section{Load and Byzantine Tests}
+\texttt{Server\_Python/load\_test.py} submits signed transactions through an
+Elixir router and monitors committed blocks. Since a block is capped at 500
+transactions, a run of 1,998 transactions requires several blocks. The
+simulation endpoints can activate invalid signatures, split-brain,
+equivocation, or leader-offline scenarios on a selected node. These modes are
+for demonstrations and testing only.
+
+\chapter{Limitations and Future Work}
+\begin{itemize}
+  \item validate transaction timestamps and reject transactions older than a
+        configured maximum age;
+  \item add an optional nonce/replay cache;
+  \item persist the client pending cache when appropriate;
+  \item add forwarding retry metrics, status dashboards, and alerts;
+  \item formally specify safe proposer takeover and locked-round recovery;
+  \item deploy HTTPS, secret management, and authenticated inter-site
+        transport.
+\end{itemize}
+
+\chapter{Conclusion}
+The implemented system separates client UX, Python state authority, and
+Elixir consensus responsibilities. Transactions become visible globally only
+after a three-validator commit certificate is persisted. The client may show
+a local optimistic overlay, but it reconciles that overlay with committed
+server state so that confirmation cannot duplicate inventory changes.
+
+\end{document}

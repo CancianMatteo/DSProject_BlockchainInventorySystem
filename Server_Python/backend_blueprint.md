@@ -56,8 +56,8 @@ Transport notes:
   routes by URL path, so no second port is needed. The 2-VPS `deploy.sh`
   publishes it as host ports 8001..8004 (nodes a/b/c/d).
 - The Elixir side never binds 8000: it listens on 4000 (cluster gossip) and
-  on the internal-only 6001 (simbehaviour forwarding from Python). The deploy
-  publishes 4000 as host ports 4001..4004 (now internal-only, no host exposure).
+  on the internal-only 6000 HTTP bridge. Neither Elixir port is published by
+  the local Compose deployment.
 
 ### 3.1 POST /auth/login
 
@@ -344,9 +344,15 @@ Response 200 (not synced):
 			"block_hash": "...",
 			"datetime": "2026-03-17T10:30:00Z",
 			"changes": {"item_1": -2, "item_2": 4},
-			"author_email": "admin@example.com",
-			"author_sign": "...",
-			"server_sign": "..."
+			"proposer_id": "node_b",
+			"proposer_signature": "...",
+			"validator_signatures": {
+				"commit": {
+					"node_a": "...",
+					"node_b": "...",
+					"node_c": "..."
+				}
+			}
 		}
 	]
 }
@@ -367,11 +373,9 @@ Request:
 {
 	"session_token": "...",
 	"transaction": {
-		"flag": "transaction",
 		"client_ID": "user@example.com",
 		"quantity": 2,
 		"item_id": "item_1",
-		"quantity": 3,
 		"location": "warehouse-1",
 		"timestamp": "2026-10-25T11:00:00Z",
 		"trans_id": "uuid",
@@ -407,10 +411,11 @@ Response 202:
 }
 ```
 
-Blocks are triggered by the Python container only: reaching
-`BLOCK_TRANSACTION_THRESHOLD` triggers immediately, while any pending
-transaction triggers after `BLOCK_TRIGGER_INTERVAL_SECONDS`. Python signals
-the local Elixir consensus engine, which proposes and commits the block.
+Python requests a proposal when the configured threshold is reached or when
+the configured idle interval elapses while pending transactions exist. Python
+signals the local Elixir consensus engine; Elixir relays a trigger when the
+local node is not the deterministic proposer. The Elixir round timeout is for
+consensus progress and is not itself a block-creation policy.
 
 ### 3.6.1 POST /chain/transaction_status
 
@@ -501,8 +506,11 @@ Recommended columns:
 - `datetime` TEXT NOT NULL
 - `changes_json` TEXT NOT NULL
 - `author_email` TEXT NOT NULL
-- `author_sign` TEXT
-- `server_sign` TEXT NOT NULL
+- `author_sign` TEXT (legacy alias for the proposer signature)
+- `server_sign` TEXT NOT NULL (legacy storage column; current responses expose
+  proposer and validator signatures instead)
+- `changes_json` stores `proposer_id`, `proposer_signature`,
+  `validator_signatures.commit`, transactions, changes, and item catalog
 
 Indexes:
 - unique index on `n_block`
@@ -609,7 +617,8 @@ Environment variables:
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`
 - `SECURITY_ALERT_EMAIL`
 - `ELIXIR_HOST=...` (container/network alias of the co-located Elixir node)
-- `ELIXIR_HTTP_PORT=6001` per node (node_a -> 6001, ... node_d -> 6004; internal Elixir HTTP listener, no host port exposure – communication uses Docker internal networking)
+- `ELIXIR_HTTP_PORT=6000` per node (internal Elixir HTTP listener, no host
+  port exposure; communication uses Docker internal networking)
 
 Runtime command:
 - `python -m app.run_server` (uvicorn on `$API_HOST:$API_PORT`, i.e. `0.0.0.0:8000`)

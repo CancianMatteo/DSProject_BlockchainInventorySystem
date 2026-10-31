@@ -312,7 +312,8 @@ defmodule InventoryNode.ConsensusEngine do
              pending_count > 0 do
     cond do
       proposer_for(state, state.current_height, state.current_round) != state.node_id ->
-        {:reply, %{"accepted" => false, "status" => "not_proposer"}, state}
+        broadcast_to_all(state.peers, {:trigger_block})
+        {:reply, %{"accepted" => false, "status" => "relayed"}, state}
 
       state.commit_started or state.round_change_started or is_map(state.pending_block) ->
         {:reply, %{"accepted" => false, "status" => "busy"}, state}
@@ -344,7 +345,7 @@ defmodule InventoryNode.ConsensusEngine do
     {:reply, %{"accepted" => false, "status" => "invalid_request"}, state}
   end
 
-  # ROUND CHANGE.
+  # ROUND CHANGE
 
   defp handle_cast_round_change(payload, state) do
     engine_pid = self()
@@ -411,14 +412,18 @@ defmodule InventoryNode.ConsensusEngine do
   # Phase 1: PRE-PREPARE (leader proposal).
 
   defp handle_cast_trigger_block(state) do
-    proposer_index = rem(state.current_height + state.current_round, length(state.validators))
-    current_proposer = Enum.at(state.validators, proposer_index)
-
-    if current_proposer == state.node_id and is_nil(state.pending_block) and
-         not state.round_change_started do
-      {:noreply, propose_block(state)}
-    else
+    if not is_integer(state.current_height) do
+      Logger.debug("Ignoro trigger_block: altezza non ancora sincronizzata")
       {:noreply, state}
+    else
+      proposer_index = rem(state.current_height + state.current_round, length(state.validators))
+      current_proposer = Enum.at(state.validators, proposer_index)
+
+      if current_proposer == state.node_id and is_nil(state.pending_block) do
+        {:noreply, propose_block(state)}
+      else
+        {:noreply, state}
+      end
     end
   end
 
@@ -967,11 +972,14 @@ defmodule InventoryNode.ConsensusEngine do
       "proposer_id" => proposer_for(state, height, state.pending_block["round"]),
       "proposer_signature" => state.temporary_signature,
       "height" => height,
-      "block_data" => state.pending_block,
-      "commit_signatures" =>
-        Enum.map(state.commit_votes, fn {validator_id, signature} ->
-          %{"validator_id" => validator_id, "signature" => signature}
-        end)
+      "block_data" =>
+        state.pending_block
+        |> Map.put("proposer_id", proposer_for(state, height, state.pending_block["round"]))
+        |> Map.put("proposer_sign", state.temporary_signature)
+        |> Map.put(
+          "validator_signatures",
+          %{"commit" => state.commit_votes}
+        )
     }
 
     case send_to_python_service(write_payload, state.python_host, state.python_port) do
