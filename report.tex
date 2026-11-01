@@ -30,7 +30,7 @@
 \begin{abstract}
 Managing inventory across multi-site enterprise environments presents critical challenges regarding data integrity and accountability. 
 Traditional centralized hierarchical systems introduce single points of failure and rely on trusted administrators who can unilaterally modify audit logs. 
-This project proposes a fault-tolerant, permissioned blockchain-based distributed system for enterprise/government asset tracking. The system guarantees immutable, append-only logging of inbound and outbound inventory transactions while supporting human error remediation through cryptographic compensating operations. 
+This project \cite{project-repo} proposes a fault-tolerant, permissioned blockchain-based distributed system for enterprise/government asset tracking. The system guarantees immutable, append-only logging of inbound and outbound inventory transactions while supporting human error remediation through cryptographic compensating operations.
 Operating over a network with fair-loss links under a synchronous model, the platform leverages Proof of Authority (PoA) and Byzantine Fault Tolerance (BFT) consensus to achieve deterministic block finality, high throughput, and resilience against adversarial node behavior.
 \end{abstract}
 
@@ -570,20 +570,18 @@ Additional improvements include timestamp-age validation, an optional
 nonce/replay cache, persistent pending-cache storage, forwarding metrics and
 alerts, HTTPS, and authenticated inter-site transport.
 
+\begin{thebibliography}{9}
+    \bibitem{project-repo}
+    CancianMatteo,
+    \textit{DSProject\_BlockchainInventorySystem},
+    GitHub repository.
+    Available at:
+    \url{https://github.com/CancianMatteo/DSProject_BlockchainInventorySystem}.
+\end{thebibliography}
 
 
 \appendix
-\chapter{Source Code and Setup Instructions}\label{ch:appendix}
 
-The local deployment requires Docker Compose, Python 3, and OpenSSL. From the
-repository root:
-\begin{verbatim}
-python3 setup_env.py
-docker compose up -d --build
-\end{verbatim}
-The Python APIs are published locally on ports 8001--8004 for nodes A--D.
-Elixir gossip uses internal port 4000 and its Python bridge uses internal port
-6000. The complete endpoint map is maintained in \texttt{PORTS.md}; protocol
-details are maintained in \texttt{specifiche\_tecniche.md}.
+
 
 \end{document}
