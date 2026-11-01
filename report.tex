@@ -440,23 +440,86 @@ quantity from being applied twice.
 \end{figure}
 
 \section{Automated Validation}
-The repository includes Flutter widget tests, Elixir ExUnit tests, and Python
-service tests. The validation workflow also runs Dart analysis, Elixir
-formatting checks, Python compilation, and Docker health checks.
+The tests and checks below were run in the local development environment.
+\begin{itemize}
+    \item Python service tests:
+    \texttt{cd Server\_Python \&\& ../.venv/bin/python -m pytest -q tests}
+    completed with 26 tests passed and 3 deprecation warnings.
+    \item Elixir Byzantine tests:
+    \texttt{docker compose exec -T node\_a mix test --no-start test/byzantine\_engine\_test.exs}
+    completed with 3 tests and 0 failures. The \texttt{--no-start} option avoids
+    starting listeners that are already used by the running Docker cluster.
+    \item Flutter widget tests:
+    \texttt{cd Client \&\& flutter test} completed with 1 test passed.
+    \item Dart analysis:
+    \texttt{cd Client \&\& flutter analyze} completed with no issues.
+    \item Elixir formatting:
+    \texttt{docker compose exec -T node\_a mix format --check-formatted}
+    passed.
+\end{itemize}
+No single CI workflow running all of these checks was verified.
 
 \section{Integration and Load Validation}
-The load-test script submits signed transactions through an Elixir router and
-waits for committed blocks. Since a block contains at most 200 transactions,
-larger runs require multiple blocks. The API exposes chain history,
-blockchain synchronization, pending transactions, transaction status, and
-forwarding-monitor endpoints for operational verification.
+The integration test submits signed transactions through the Elixir router and
+waits until they appear in committed blocks. For example, the 200-transaction
+test was run with:
+\begin{verbatim}
+docker compose exec -T python_validator_a python /app/load_test.py \
+  --count 200 --node node_a --delay 0.05 --timeout 600
+\end{verbatim}
+The normal-mode run committed all 200 requested transaction IDs. The first
+block was proposed before all transactions had propagated, so a follow-up
+submission of 34 additional transactions was needed to reach the next block
+threshold and commit the remaining pending transactions. The four nodes then
+reported the same chain head and no pending transactions. The API readiness
+endpoint was also checked on all four nodes.
+
+Each block can contain at most 200 transactions. The chain history and pending
+transaction endpoints were used to compare block heights, hashes, and
+remaining transactions across the nodes.
 
 \section{Fault Injection}
-The deployment supports test modes for invalid signatures, split-brain
-behaviour, equivocation, and an unavailable leader. These modes are intended
-for controlled demonstrations. With four validators, the normal quorum is
-three; safety assumes at most one Byzantine validator, while availability
-also depends on the selected proposer and network connectivity.
+Byzantine mode is off by default. For each test, node D was configured with
+one \texttt{BIZANTINE\_SCENARIO} value, its containers were recreated without
+deleting database volumes, and the mode was enabled with
+\texttt{POST /api/v1/simbehaviour/bizantine}. The following results were
+observed:
+\begin{verbatim}
+BIZANTINE_SCENARIO=<scenario> docker compose up -d --force-recreate \
+  python_validator_d node_d
+curl -X POST http://localhost:8004/api/v1/simbehaviour/bizantine
+docker compose exec -T python_validator_a python /app/load_test.py \
+  --count 200 --node node_a --delay 0.05 --timeout 600
+\end{verbatim}
+\begin{itemize}
+    \item \texttt{split\_brain}: passed with 200 transactions. D proposed the
+    block but did not provide a COMMIT vote. The other three validators formed
+    the COMMIT quorum, and all nodes stored the same block.
+    \item \texttt{invalid\_signature}: passed with 200 transactions. The logs
+    showed D's invalid signature being rejected. An honest proposer then
+    committed the block, and all nodes stored the same 200-transaction block.
+    \item \texttt{equivocation}: passed as a targeted consensus test with two
+    signed transactions. D was the proposer at height 10, round 5. The nodes
+    detected a valid conflict proof; the block reached a three-vote COMMIT
+    quorum, and the already-committing nodes sent its COMMIT certificate only
+    to reporter C. C imported the block, and all four nodes ended with the
+    same height and block hash.
+    \item \texttt{leader\_offline}: passed as a targeted consensus test with
+    two signed transactions. D reached PREPARE quorum at height 12, round 7,
+    but withheld the COMMIT proposal and its ROUND\_CHANGE message. The honest
+    nodes reached a ROUND\_CHANGE quorum. An honest proposer then committed
+    the block, which was present with the same hash on all four nodes.
+\end{itemize}
+The equivocation and unavailable-leader tests used two transactions staged on
+each Python validator, without first sending a proposal trigger. A
+\texttt{proposal\_request} was sent only after logs showed D as the active
+proposer. For the unavailable-leader case, another request was sent to the
+honest proposer after the ROUND\_CHANGE quorum. These tests verify the specific
+consensus fault paths, but are not 200-transaction load tests. At the end,
+Byzantine mode was disabled and all four readiness endpoints returned
+\texttt{ready}. In all tests, the four-validator deployment used a quorum of
+three. Safety and availability still depend on the assumed maximum of one
+Byzantine validator and on network connectivity.
 
 
 

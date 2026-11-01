@@ -20,25 +20,6 @@ class BlockDetailScreen extends StatelessWidget {
     return lines.join('\n');
   }
 
-  String _displayNode(String nodeId) {
-    final normalized = nodeId.replaceAll('_', '-');
-    final match = RegExp(r'^node-([a-z])$').firstMatch(normalized);
-    return match == null
-        ? normalized
-        : 'node-${match.group(1)!.toUpperCase()}';
-  }
-
-  String _formatValidatorSignatures(Block b) {
-    if (b.validatorSignatures.isEmpty) return 'Nessuna firma disponibile';
-    final lines = <String>[];
-    final raw = b.validatorSignatures['commit'];
-    if (raw is! Map) return 'Nessuna firma disponibile';
-    for (final entry in raw.entries) {
-      lines.add('COMMIT ${_displayNode(entry.key.toString())}: ${entry.value}');
-    }
-    return lines.isEmpty ? 'Nessuna firma disponibile' : lines.join('\n');
-  }
-
   @override
   Widget build(BuildContext context) {
     final data = block;

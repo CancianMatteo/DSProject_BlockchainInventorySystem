@@ -169,7 +169,7 @@ The test inserts real transactions and blocks into the persistent databases.
 Do not run it against production data. Each block contains at most 200
 transactions. If there are fewer than 200 pending transactions when the
 10-minute idle trigger fires (for example, because the latest existing block
-is already older than 15 minutes), a smaller block may be proposed and the
+is already older than 10 minutes), a smaller block may be proposed and the
 script can wait for the remaining transactions. In that case run the same
 command again with a small additional `--count` (for example, `--count 49`)
 to reach the next block threshold, or wait for the idle trigger.

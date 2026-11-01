@@ -52,13 +52,13 @@ def test_mempool_trigger_requires_200_pending_transactions(monkeypatch):
         engine.dispose()
 
 
-def test_idle_trigger_starts_after_15_minutes_with_pending_transactions(monkeypatch):
+def test_idle_trigger_starts_after_10_minutes_with_pending_transactions(monkeypatch):
     engine = make_db()
     now = datetime.now(UTC)
     monkeypatch.setattr(
         proposal_trigger_service,
         "_started_at",
-        now - timedelta(minutes=15),
+        now - timedelta(minutes=10),
     )
     try:
         with Session(engine) as db:
@@ -87,7 +87,7 @@ def test_idle_trigger_uses_persisted_commit_time(monkeypatch):
                     n_block=1,
                     prev_block_hash=None,
                     block_hash="test-hash",
-                    datetime=(now - timedelta(minutes=14)).isoformat(),
+                    datetime=(now - timedelta(minutes=9)).isoformat(),
                     changes_json="{}",
                     author_email="test@example.org",
                     author_sign=None,
@@ -98,7 +98,7 @@ def test_idle_trigger_uses_persisted_commit_time(monkeypatch):
             assert proposal_trigger_service.proposal_trigger(db, now) == (None, 1)
 
             latest = db.query(ChainBlock).one()
-            latest.datetime = (now - timedelta(minutes=15)).isoformat()
+            latest.datetime = (now - timedelta(minutes=10)).isoformat()
             db.commit()
             assert proposal_trigger_service.proposal_trigger(db, now) == (
                 "idle_timeout",
