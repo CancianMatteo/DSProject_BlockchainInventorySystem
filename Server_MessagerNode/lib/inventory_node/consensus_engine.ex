@@ -5,15 +5,18 @@ defmodule InventoryNode.ConsensusEngine do
   # Maximum time to commit a block before changing proposer.
   @round_timeout 8000
 
+  # starts the consensus genserver; input: startup options; output: the usual genserver start result.
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, :ok, opts ++ [name: __MODULE__])
   end
 
+  # asks this node to consider a proposal trigger; input: trigger reason and pending count; output: the genserver reply.
   def request_proposal(reason, pending_count) do
     GenServer.call(__MODULE__, {:proposal_request, reason, pending_count}, 15_000)
   end
 
   @impl true
+  # builds the initial node state and starts chain synchronization; input: :ok; output: {:ok, state}.
   def init(:ok) do
     node_id = System.get_env("NODE_ID") || "node_a"
     python_host = (System.get_env("PYTHON_HOST") || "localhost") |> String.to_charlist()
@@ -65,6 +68,7 @@ defmodule InventoryNode.ConsensusEngine do
   end
 
   @impl true
+  # routes incoming peer messages to their handlers; input: message and current state; output: {:noreply, updated state}.
   def handle_cast(message, state) do
     case message do
       {:round_change, payload} ->
@@ -115,6 +119,7 @@ defmodule InventoryNode.ConsensusEngine do
   end
 
   @impl true
+  # routes internal results and timer events; input: message and current state; output: a genserver callback result.
   def handle_info(message, state) do
     case message do
       :initialize_from_python ->
@@ -216,6 +221,7 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
+  # handles an expired consensus timer; input: current state; output: {:noreply, state} with a retry timer or round-change vote.
   defp handle_info_round_timeout(state) do
     if state.commit_started do
       Logger.warning(
@@ -252,6 +258,7 @@ defmodule InventoryNode.ConsensusEngine do
 
   # Round and proposer management (round-robin).
 
+  # replaces the current timeout; input: node state; output: state with a new timer reference and token.
   defp schedule_round_timeout(state) do
     if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
     token = make_ref()
@@ -259,6 +266,7 @@ defmodule InventoryNode.ConsensusEngine do
     %{state | timer_ref: timer_ref, timeout_token: token}
   end
 
+  # prepares a clean consensus attempt and logs its proposer; input: node state; output: state reset for the current round.
   defp start_round(state) do
     timed_state = schedule_round_timeout(state)
 
@@ -288,6 +296,7 @@ defmodule InventoryNode.ConsensusEngine do
     new_state
   end
 
+  # loads the next block height from python on startup; input: node state; output: {:noreply, synchronized state}.
   defp handle_info_initialize_from_python(state) do
     case send_to_python_service(%{"flag" => "chain_state"}, state.python_host, state.python_port) do
       {:ok, %{"next_height" => height}} when is_integer(height) and height > 0 ->
@@ -307,6 +316,7 @@ defmodule InventoryNode.ConsensusEngine do
   end
 
   @impl true
+  # accepts a valid proposal request only when this node is the current proposer; input: trigger tuple, caller, and state; output: reply plus updated state.
   def handle_call({:proposal_request, reason, pending_count}, _from, state)
       when reason in ["mempool_full", "idle_timeout"] and is_integer(pending_count) and
              pending_count > 0 do
@@ -341,12 +351,14 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
+  # rejects malformed proposal requests; input: any unsupported request and state; output: invalid-request reply and unchanged state.
   def handle_call({:proposal_request, _reason, _pending_count}, _from, state) do
     {:reply, %{"accepted" => false, "status" => "invalid_request"}, state}
   end
 
   # ROUND CHANGE
 
+  # verifies a received round-change signature asynchronously; input: signed payload and state; output: {:noreply, unchanged state}.
   defp handle_cast_round_change(payload, state) do
     engine_pid = self()
     verification_payload = Map.put(payload, "flag", "verified_round_change")
@@ -368,6 +380,7 @@ defmodule InventoryNode.ConsensusEngine do
     {:noreply, state}
   end
 
+  # records a verified round change or equivocation proof and advances when its quorum is met; input: height, target round, signer, payload, and state; output: {:noreply, updated state}.
   defp handle_info_verified_round_change(height, target_round, validator_id, payload, state) do
     {state, is_new_evidence} = record_equivocation_evidence(payload, state)
     state = remember_equivocation_recovery_target(state, height, payload)
@@ -406,11 +419,13 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
+  # logs and ignores an invalid round-change signature; input: signer id and state; output: the bad-signature handler result.
   defp handle_info_bad_round_change(validator_id, state),
     do: ignore_bad_sig(validator_id, state)
 
   # Phase 1: PRE-PREPARE (leader proposal).
 
+  # reacts to a peer's request to check for a proposal; input: node state; output: {:noreply, state} with a proposal if this node is leader.
   defp handle_cast_trigger_block(state) do
     if not is_integer(state.current_height) do
       Logger.debug("Ignoro trigger_block: altezza non ancora sincronizzata")
@@ -427,6 +442,7 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
+  # asks python for a block, signs its prepare vote, and broadcasts pre-prepare; input: proposer state; output: state with the proposal or unchanged state on failure.
   defp propose_block(state) do
     payload = %{
       "flag" => "prepare_block",
@@ -489,6 +505,7 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
+  # checks an incoming pre-prepare with python in a task; input: height, round, proposer, block, signature, and state; output: {:noreply, unchanged state}.
   defp handle_cast_pre_prepare(height, round, proposer_id, block_data, signature, state) do
     engine_pid = self()
 
@@ -521,6 +538,7 @@ defmodule InventoryNode.ConsensusEngine do
     {:noreply, state}
   end
 
+  # accepts one valid proposal and sends this validator's prepare vote; input: verified proposal fields and state; output: {:noreply, updated state}.
   defp handle_info_verified_pre_prepare(
          height,
          round,
@@ -587,11 +605,13 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
+  # logs and ignores an invalid proposer signature; input: proposer id and state; output: the bad-signature handler result.
   defp handle_info_bad_pre_prepare(proposer_id, state),
     do: ignore_bad_sig(proposer_id, state)
 
   # Phase 2: PREPARE (the proposer receives signatures from nodes by unicast).
 
+  # verifies a prepare vote with python when this node is proposer; input: height, round, block hash, signer, signature, and state; output: {:noreply, unchanged state}.
   defp handle_cast_prepare_vote(height, round, block_hash, validator_id, signature, state) do
     engine_pid = self()
 
@@ -627,6 +647,7 @@ defmodule InventoryNode.ConsensusEngine do
     {:noreply, state}
   end
 
+  # adds a valid prepare vote and broadcasts the prepare certificate at quorum; input: vote fields and state; output: {:noreply, updated state}.
   defp handle_info_verified_prepare_vote(
          height,
          round,
@@ -663,11 +684,13 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
+  # logs and ignores an invalid prepare signature; input: signer id and state; output: the bad-signature handler result.
   defp handle_info_bad_prepare_vote(validator_id, state),
     do: ignore_bad_sig(validator_id, state)
 
   # Phase 3: COMMIT (a separate vote after the PREPARE certificate).
 
+  # checks the prepare certificate attached to a commit proposal; input: proposal fields and state; output: {:noreply, unchanged state} while verification runs.
   defp handle_cast_commit_proposal(
          height,
          round,
@@ -720,6 +743,7 @@ defmodule InventoryNode.ConsensusEngine do
     {:noreply, state}
   end
 
+  # starts this validator's commit vote after the certificate passes checks; input: verified proposal, certificate, and state; output: {:noreply, updated state}.
   defp handle_info_verified_commit_proposal(
          height,
          round,
@@ -774,9 +798,11 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
+  # logs and ignores an invalid prepare certificate; input: proposer id and state; output: the bad-signature handler result.
   defp handle_info_bad_commit_proposal(proposer_id, state),
     do: ignore_bad_sig(proposer_id, state)
 
+  # validates a peer's commit vote and its prepare certificate asynchronously; input: proposal, certificate, vote fields, and state; output: {:noreply, unchanged state}.
   defp handle_cast_commit_vote(
          height,
          round,
@@ -840,6 +866,7 @@ defmodule InventoryNode.ConsensusEngine do
     {:noreply, state}
   end
 
+  # adds a verified commit vote and persists the block at quorum; input: proposal, certificate, vote fields, and state; output: {:noreply, updated state}.
   defp handle_info_verified_commit_vote(
          height,
          round,
@@ -910,9 +937,11 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
+  # logs and ignores an invalid commit signature; input: signer id and state; output: the bad-signature handler result.
   defp handle_info_bad_commit_vote(validator_id, state),
     do: ignore_bad_sig(validator_id, state)
 
+  # signs and broadcasts this node's commit vote unless the scenario withholds it; input: proposal fields, prepare certificate, and state; output: updated state.
   defp start_commit_voting(
          state,
          height,
@@ -955,12 +984,14 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
+  # checks whether split-brain mode makes the proposer withhold its commit vote; input: state and proposer id; output: true or false.
   defp withhold_commit_vote?(state, proposer_id) do
     InventoryNode.SimBehaviour.get() == :bizantine and
       InventoryNode.ByzantineEngine.scenario() == "split_brain" and
       proposer_id == state.node_id
   end
 
+  # writes a block after commit quorum and sends it to any recovery reporters; input: committed state and height; output: {:noreply, next-round state} or the unchanged state on write failure.
   defp write_committed_block(state, height) do
     Logger.info(
       "COMMIT quorum reached (#{map_size(state.commit_votes)}/#{state.quorum}). " <>
@@ -1028,6 +1059,7 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
+  # creates a signed round-change proof after conflicting proposals are seen; input: both proposal identities and signatures plus state; output: :ok after scheduling proof creation.
   defp report_pre_prepare_conflict(
          height,
          round,
@@ -1068,11 +1100,13 @@ defmodule InventoryNode.ConsensusEngine do
     :ok
   end
 
+  # broadcasts a round-change proof created by the conflict checker; input: signed proof and state; output: {:noreply, unchanged state}.
   defp handle_info_broadcast_round_change(payload, state) do
     broadcast_to_all(state.peers, {:round_change, payload})
     {:noreply, state}
   end
 
+  # records new equivocation evidence and abandons the proposal if commit has not started; input: proof payload and state; output: {updated state, whether evidence is new}.
   defp record_equivocation_evidence(payload, state) do
     with true <- is_map(payload),
          height when is_integer(height) <- payload["height"],
@@ -1113,10 +1147,12 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
+  # checks whether evidence exists for one proposer at one height and round; input: state, height, round, and proposer id; output: true or false.
   defp has_equivocation_evidence?(state, height, round, proposer_id) do
     MapSet.member?(state.equivocation_evidence, {height, round, proposer_id})
   end
 
+  # remembers reporters that need a committed block after this node has started commit; input: state, height, and proof payload; output: state with an updated reporter set or the original state.
   defp remember_equivocation_recovery_target(state, height, payload) do
     with true <- equivocation_proof?(payload),
          round when is_integer(round) <- payload["round"],
@@ -1139,6 +1175,7 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
+  # checks that a conflict payload has the required proof fields; input: a map payload; output: true only when its fields have the expected basic types.
   defp equivocation_proof?(payload) when is_map(payload) do
     is_integer(payload["height"]) and is_integer(payload["round"]) and
       is_binary(payload["proposer_id"]) and is_binary(payload["validator_id"]) and
@@ -1148,8 +1185,10 @@ defmodule InventoryNode.ConsensusEngine do
       is_binary(payload["conflicting_signature"])
   end
 
+  # rejects non-map conflict payloads; input: any term; output: false.
   defp equivocation_proof?(_payload), do: false
 
+  # fetches a previously committed block for a valid reporter; input: old block height, proof payload, and state; output: :ok after scheduling a targeted send.
   defp request_finalized_block_if_committed(height, payload, state)
        when is_integer(height) and is_integer(state.current_height) and
               height < state.current_height do
@@ -1182,8 +1221,10 @@ defmodule InventoryNode.ConsensusEngine do
     :ok
   end
 
+  # does nothing when the reported block is not already behind this node; input: height, payload, and state; output: :ok.
   defp request_finalized_block_if_committed(_height, _payload, _state), do: :ok
 
+  # sends a recovery package only to known target peers; input: finalized package, target ids, and state; output: {:noreply, unchanged state}.
   defp handle_info_send_finalized_block(package, target_ids, state) do
     target_ids = Enum.filter(target_ids, &Map.has_key?(state.peers, &1))
 
@@ -1194,6 +1235,7 @@ defmodule InventoryNode.ConsensusEngine do
     {:noreply, state}
   end
 
+  # asks python to verify and import a finalized recovery package; input: package map and state; output: {:noreply, unchanged state} while import runs.
   defp handle_cast_finalized_block(package, state) when is_map(package) do
     block = package["block_data"]
 
@@ -1228,11 +1270,13 @@ defmodule InventoryNode.ConsensusEngine do
     {:noreply, state}
   end
 
+  # ignores malformed recovery packages; input: any non-map package and state; output: {:noreply, unchanged state}.
   defp handle_cast_finalized_block(_package, state) do
     Logger.warning("Malformed finalized-block package; ignoring it.")
     {:noreply, state}
   end
 
+  # moves to the next height after python confirms recovery import; input: imported height, block hash, and state; output: {:noreply, next-height state} or unchanged state.
   defp handle_info_finalized_block_imported(height, block_hash, state) do
     if height == state.current_height do
       Logger.info(
@@ -1260,18 +1304,22 @@ defmodule InventoryNode.ConsensusEngine do
 
   # Helpers.
 
+  # selects the proposer using the configured validator order; input: state, positive height, and non-negative round; output: proposer id or nil if no clause matches.
   defp proposer_for(state, height, round)
        when is_integer(height) and height > 0 and is_integer(round) and round >= 0 do
     Enum.at(state.validators, rem(height + round, length(state.validators)))
   end
 
+  # returns no proposer for invalid height or round values; input: state and invalid height/round; output: nil.
   defp proposer_for(_state, _height, _round), do: nil
 
+  # logs a bad signature without accepting the message; input: signer id and state; output: {:noreply, unchanged state}.
   defp ignore_bad_sig(node_id, state) do
     Logger.error("Invalid signature from #{node_id}. Possible Byzantine validator!")
     {:noreply, state}
   end
 
+  # broadcasts a consensus message while applying the active fault-injection plan; input: peer map and message; output: :ok after scheduling or suppressing sends.
   defp broadcast_to_all(peers, message) do
     case InventoryNode.SimBehaviour.get() do
       :noresponse ->
@@ -1290,6 +1338,7 @@ defmodule InventoryNode.ConsensusEngine do
   end
 
   # Send a message to one peer (for example, a PREPARE vote to the proposer).
+  # sends one message to its target; input: target id, peer map, message, and local node id; output: :ok or a logged missing-peer error.
   defp send_unicast(target_id, peers, message, current_node_id) do
     if target_id == current_node_id do
       GenServer.cast(__MODULE__, message)
@@ -1306,12 +1355,14 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
+  # handles a local copy and sends the same message to every peer; input: peer map and message; output: :ok.
   defp do_broadcast(peers, message) do
     GenServer.cast(__MODULE__, message)
 
     send_to_peer_ids(Map.keys(peers), peers, message)
   end
 
+  # serializes and schedules a message for selected peers; input: peer ids, peer map, and message; output: :ok.
   defp send_to_peer_ids(peer_ids, peers, message) do
     data = :erlang.term_to_binary(message)
 
@@ -1324,6 +1375,7 @@ defmodule InventoryNode.ConsensusEngine do
     :ok
   end
 
+  # sends one framed erlang-term message over tcp; input: peer id, host, port, and serialized bytes; output: :ok or a logged connection/send failure.
   defp send_tcp(peer_id, host, port, binary_data) do
     case :gen_tcp.connect(host, port, [:binary, active: false], 1000) do
       {:ok, socket} ->
@@ -1344,6 +1396,7 @@ defmodule InventoryNode.ConsensusEngine do
     end
   end
 
+  # parses the comma-separated peer configuration; input: peers environment value or nil; output: a map of peer ids to host/port pairs.
   defp parse_peers(peers_env) do
     (peers_env || "")
     |> String.split(",", trim: true)
@@ -1360,6 +1413,7 @@ defmodule InventoryNode.ConsensusEngine do
     end)
   end
 
+  # calls the local python bridge; input: request map, python host, and port; output: the python client's response tuple.
   defp send_to_python_service(payload, py_host, py_port) do
     InventoryNode.PythonClient.call(payload, py_host, py_port)
   end

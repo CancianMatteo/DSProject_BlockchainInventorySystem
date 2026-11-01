@@ -340,7 +340,7 @@ The consensus steps are:
     starts the \texttt{COMMIT} phase by broadcasting the proposal with its
     \texttt{PREPARE} certificate.
     \item Each validator verifies this certificate, then sends a signed
-    \texttt{COMMIT} vote. It also signs and counts its own vote.
+    \texttt{COMMIT} vote in broadcast. It also signs and counts its own vote.
     \item After three valid \texttt{COMMIT} votes, each validator stores the block in its local database. The block keeps the COMMIT certificate.
 \end{enumerate}
 If a round does not finish within 8 seconds, validators send signed
@@ -352,7 +352,7 @@ valid messages. The next proposer is then selected by the fixed order.
     \item \textbf{Client to Python:} The client sends transactions to a Python
     REST API over HTTP. It signs each transaction before sending it. Python
     checks the request, stores the transaction, and forwards it to the other
-    validators. The client can later ask Python for the transaction status.
+    validators. The client can later ask Python for the transaction status or transactions history.
     \item \textbf{Python to Elixir:} The two components on a validator use an
     internal HTTP interface. Python asks Elixir to start a proposal when a
     trigger is reached. Elixir asks Python to build blocks, create or check
