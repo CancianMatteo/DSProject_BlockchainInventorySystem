@@ -24,9 +24,9 @@ def make_db():
 def add_pending(db: Session, count: int, start: int = 0) -> None:
     db.add_all(
         PendingTransaction(
-            tx_id=f"tx-{index}",
+            trans_id=f"tx-{index}",
             transaction_json=json.dumps(
-                {"tx_id": f"tx-{index}", "tx_type": "inbound"}
+                {"trans_id": f"tx-{index}", "tx_type": "inbound"}
             ),
             status="pending",
         )
@@ -35,18 +35,18 @@ def add_pending(db: Session, count: int, start: int = 0) -> None:
     db.commit()
 
 
-def test_mempool_trigger_requires_500_pending_transactions(monkeypatch):
+def test_mempool_trigger_requires_200_pending_transactions(monkeypatch):
     engine = make_db()
     now = datetime.now(UTC)
     monkeypatch.setattr(proposal_trigger_service, "_started_at", now)
     try:
         with Session(engine) as db:
-            add_pending(db, 499)
-            assert proposal_trigger_service.proposal_trigger(db, now) == (None, 499)
-            add_pending(db, 1, start=499)
+            add_pending(db, 199)
+            assert proposal_trigger_service.proposal_trigger(db, now) == (None, 199)
+            add_pending(db, 1, start=199)
             assert proposal_trigger_service.proposal_trigger(db, now) == (
                 "mempool_full",
-                500,
+                200,
             )
     finally:
         engine.dispose()

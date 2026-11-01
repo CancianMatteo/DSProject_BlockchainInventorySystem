@@ -172,7 +172,7 @@ In this chapter, we outline the functional and non-functional requirements for t
     The distributed ledger must deliver deterministic block finality (zero fork probability once a block is confirmed by a majority of validators), ensuring immediate consistency across all warehouse locations.
 
     \item[\textbf{NFR-4: Performance \& Throughput}]
-    Transactions are collected in blocks of at most 500 entries. Python
+    Transactions are collected in blocks of at most 200 entries. Python
     triggers a proposal at the configured mempool threshold or after the
     configured idle interval while transactions are pending. The Elixir round
     timeout is a consensus timeout, not a block-creation interval.
@@ -321,6 +321,74 @@ SQLite; the inventory cache is rebuildable from committed blocks. Each Elixir
 node contains the HTTP bridge, the Erlang-term cluster listener, the router,
 and the consensus engine.
 
+\section{Consensus and Communication Flow}
+The system has four validators. They use a fixed order to select the proposer
+for each height and round. A block can contain at most 200 transactions.
+Python asks Elixir to start a proposal when the pending pool reaches 200
+transactions, or when transactions have been pending for 10 minutes.
+
+The consensus steps are:
+\begin{enumerate}
+    \item Python asks the local Elixir node to start a proposal when a proposal
+    trigger fires. Elixir starts it only if this node is the proposer for the
+    current round. The proposer then asks its Python service to build and sign
+    the block. It also signs its own \texttt{PREPARE} vote and counts it.
+    \item The proposer sends a \texttt{PRE-PREPARE} message to the other validators.
+    \item Validators check the proposer, block, and signature. They then send
+    signed \texttt{PREPARE} votes to the proposer.
+    \item After collecting three valid \texttt{PREPARE} votes, the proposer
+    starts the \texttt{COMMIT} phase by broadcasting the proposal with its
+    \texttt{PREPARE} certificate.
+    \item Each validator verifies this certificate, then sends a signed
+    \texttt{COMMIT} vote. It also signs and counts its own vote.
+    \item After three valid \texttt{COMMIT} votes, each validator stores the block in its local database. The block keeps the COMMIT certificate.
+\end{enumerate}
+If a round does not finish within 8 seconds, validators send signed
+\texttt{ROUND\_CHANGE} messages. A new round starts after a quorum of three
+valid messages. The next proposer is then selected by the fixed order.
+
+\subsection{Communication Between Components}
+\begin{itemize}
+    \item \textbf{Client to Python:} The client sends transactions to a Python
+    REST API over HTTP. It signs each transaction before sending it. Python
+    checks the request, stores the transaction, and forwards it to the other
+    validators. The client can later ask Python for the transaction status.
+    \item \textbf{Python to Elixir:} The two components on a validator use an
+    internal HTTP interface. Python asks Elixir to start a proposal when a
+    trigger is reached. Elixir asks Python to build blocks, create or check
+    signatures, and save committed blocks.
+    \item \textbf{Between validators:} Elixir nodes exchange consensus messages
+    over TCP. Messages use Erlang's external term format. Python HTTP is not
+    used for validator-to-validator consensus traffic.
+\end{itemize}
+
+\subsection{Byzantine Test Modes}
+The Byzantine mode is off by default. It is activated on a node through the
+\texttt{/api/v1/simbehaviour/bizantine} endpoint. The
+\texttt{BIZANTINE\_SCENARIO} setting selects the fault. Transactions are still
+accepted and forwarded; the fault changes only consensus messages.
+
+\begin{itemize}
+    \item \textbf{\texttt{invalid\_signature}:} The faulty node sends votes or
+    proposals with invalid signatures. Other validators reject them. The
+    remaining three validators can still reach a quorum.
+    \item \textbf{\texttt{split\_brain}:} If the faulty node is proposer, it
+    sends the COMMIT proposal to only two peers and does not send its own
+    COMMIT vote. The peers share valid COMMIT votes. The three honest
+    validators can still form a quorum.
+    \item \textbf{\texttt{equivocation}:} If the faulty node is proposer, it
+    sends two different, validly signed proposals to separate groups. A
+    validator that sees both reports proof of the conflict. If it has not
+    started COMMIT, it stops voting for that block and asks for a round change.
+    If it has already started COMMIT, it may finish. Afterward, validators
+    that committed send the block and its COMMIT certificate only to the
+    reporting validator, so it can catch up.
+    \item \textbf{\texttt{leader\_offline}:} The faulty proposer stops sending
+    the COMMIT proposal and its \texttt{ROUND\_CHANGE} vote. Honest validators
+    time out, exchange their own round-change votes, and select a new proposer
+    after reaching a quorum.
+\end{itemize}
+
 \section{Persisted Block Certificate}
 The public block representation contains the proposer identifier and signature
 plus the COMMIT signatures of the validators:
@@ -378,7 +446,7 @@ formatting checks, Python compilation, and Docker health checks.
 
 \section{Integration and Load Validation}
 The load-test script submits signed transactions through an Elixir router and
-waits for committed blocks. Since a block contains at most 500 transactions,
+waits for committed blocks. Since a block contains at most 200 transactions,
 larger runs require multiple blocks. The API exposes chain history,
 blockchain synchronization, pending transactions, transaction status, and
 forwarding-monitor endpoints for operational verification.

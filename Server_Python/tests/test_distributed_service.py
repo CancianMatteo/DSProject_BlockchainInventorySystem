@@ -13,10 +13,10 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
 from app.api.routes_chain import get_chain_history
-from app.db.models import BlockVote, PendingTransaction
+from app.db.models import BlockVote, ChainBlock, PendingTransaction
 from app.db.repositories import insert_block
 from app.db.session import Base
-from app.services import simbehaviour_service
+from app.services import distributed_service, simbehaviour_service
 from app.services.cache_service import inventory_cache
 from app.services.distributed_service import (
     DistributedReject,
@@ -235,9 +235,49 @@ def test_finalized_block_persists_commit_certificate_and_import_is_idempotent(
     assert recovered["proposer_id"] == proposer_id
     assert recovered["proposer_signature"] == proposer_signature
     assert len(recovered["commit_signatures"]) == 3
+    recovered_block = recovered["block_data"]
+    assert recovered_block["proposer_id"] == proposer_id
+    assert recovered_block["proposer_sign"] == proposer_signature
+    assert recovered_block["validator_signatures"]["commit"] == {
+        vote["validator_id"]: vote["signature"] for vote in commit_signatures
+    }
     assert write_committed_block(
         db, block, proposer_id, proposer_signature, commit_signatures
     ) == {"status": True, "duplicate": True}
+
+
+def test_finalized_block_import_is_idempotent_after_a_concurrent_insert(
+    db, validator_keys, monkeypatch
+):
+    transaction = make_transaction()
+    submit_transaction(db, transaction)
+    block = build_proposal(db, 0)["block"]
+    proposer_id, proposer_signature, commit_signatures = make_finalization_certificate(
+        block, validator_keys
+    )
+    original_store_block = distributed_service._store_block
+    first_store = True
+
+    def store_with_concurrent_duplicate(session, *args, **kwargs):
+        nonlocal first_store
+        if first_store:
+            first_store = False
+            original_store_block(session, *args, **kwargs)
+        return original_store_block(session, *args, **kwargs)
+
+    monkeypatch.setattr(
+        distributed_service, "_store_block", store_with_concurrent_duplicate
+    )
+
+    result = write_committed_block(
+        db, block, proposer_id, proposer_signature, commit_signatures
+    )
+
+    assert result == {"status": True, "duplicate": True}
+    stored_block = db.query(ChainBlock).one()
+    assert stored_block.block_hash == block["block_hash"]
+    stored_votes = db.query(BlockVote).filter_by(block_hash=block["block_hash"]).all()
+    assert len(stored_votes) == 3
 
 
 def test_finalized_block_rejects_prepare_signatures_as_commit_certificate(
@@ -729,7 +769,7 @@ def test_equivocation_scenario_requires_two_pending_transactions(
         simbehaviour_service.set_mode(simbehaviour_service.HEALTHY)
 
 
-def test_proposal_contains_at_most_500_transactions(db):
+def test_proposal_contains_at_most_200_transactions(db):
     db.add_all(
         PendingTransaction(
             trans_id=f"tx-{index:04}",
@@ -742,10 +782,10 @@ def test_proposal_contains_at_most_500_transactions(db):
             ),
             status="pending",
         )
-        for index in range(501)
+        for index in range(201)
     )
     db.commit()
 
     block = build_proposal(db, 0)["block"]
 
-    assert len(block["transactions"]) == 500
+    assert len(block["transactions"]) == 200

@@ -10,8 +10,8 @@ from app.db.models import PendingTransaction
 from app.db.repositories import get_latest_block
 
 
-MAX_BLOCK_TRANSACTIONS = 500
-IDLE_PROPOSAL_INTERVAL = timedelta(minutes=15)
+MAX_BLOCK_TRANSACTIONS = 200
+IDLE_PROPOSAL_INTERVAL = timedelta(minutes=10)
 _started_at = datetime.now(UTC)
 
 

@@ -210,8 +210,8 @@ are part of the validation workflow.
 
 \section{Load and Byzantine Tests}
 \texttt{Server\_Python/load\_test.py} submits signed transactions through an
-Elixir router and monitors committed blocks. Since a block is capped at 500
-transactions, a run of 1,998 transactions requires several blocks. The
+Elixir router and monitors committed blocks. Since a block is capped at 200
+transactions, a run of 1,998 transactions requires about ten blocks. The
 simulation endpoints can activate invalid signatures, split-brain,
 equivocation, or leader-offline scenarios on a selected node. These modes are
 for demonstrations and testing only.

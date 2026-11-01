@@ -15,8 +15,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
-from sqlalchemy.orm import Session
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.exceptions import AppError
@@ -1169,17 +1170,14 @@ def write_committed_block(
     transactions = block.get("transactions")
     if not isinstance(transactions, list) or not transactions:
         raise DistributedReject("Committed block must contain transactions")
-    if not isinstance(block.get("proposer_id"), str) or not block["proposer_id"]:
+    if not isinstance(proposer_id, str) or not proposer_id:
         raise DistributedReject("Committed block is missing proposer_id")
-    if not isinstance(block.get("proposer_sign"), str) or not block["proposer_sign"]:
+    if not isinstance(proposer_signature, str) or not proposer_signature:
         raise DistributedReject("Committed block is missing proposer signature")
-    validator_signatures = block.get("validator_signatures")
-    if (
-        not isinstance(validator_signatures, dict)
-        or not isinstance(validator_signatures.get("commit"), dict)
-        or not validator_signatures["commit"]
-    ):
-        raise DistributedReject("Committed block is missing validator signatures")
+    if block.get("proposer_id", proposer_id) != proposer_id:
+        raise DistributedReject("Committed block proposer_id does not match the certificate")
+    if block.get("proposer_sign", proposer_signature) != proposer_signature:
+        raise DistributedReject("Committed block proposer signature does not match the certificate")
     if not isinstance(block.get("block_hash"), str) or _compute_block_hash(block) != block["block_hash"]:
         raise DistributedReject("Committed block hash is invalid")
     proposal_payload = {
@@ -1192,6 +1190,16 @@ def write_committed_block(
     if not verify_pre_prepare(proposal_payload):
         raise DistributedReject("Committed block proposer signature is invalid")
     valid_votes = _verify_phase_votes(block, commit_signatures, "commit")
+    finalized_block = {
+        **block,
+        "proposer_id": proposer_id,
+        "proposer_sign": proposer_signature,
+        "validator_signatures": {
+            "commit": {
+                vote["validator_id"]: vote["signature"] for vote in valid_votes
+            }
+        },
+    }
 
     latest = repositories.get_latest_block(db)
     if latest is not None and block["block_hash"] == latest.block_hash:
@@ -1212,16 +1220,26 @@ def write_committed_block(
 
     validated = [_validate_transaction(tx) for tx in transactions]
     changes, catalog = _validate_inventory_transition(_order_transactions(validated))
-    _store_block(
-        db,
-        block,
-        valid_votes,
-        changes,
-        catalog,
-        vote_phase="commit",
-        proposer_id=proposer_id,
-        proposer_signature=proposer_signature,
-    )
+    try:
+        _store_block(
+            db,
+            finalized_block,
+            valid_votes,
+            changes,
+            catalog,
+            vote_phase="commit",
+            proposer_id=proposer_id,
+            proposer_signature=proposer_signature,
+        )
+    except IntegrityError:
+        db.rollback()
+        concurrently_stored = repositories.get_block_by_height(db, height)
+        if (
+            concurrently_stored is None
+            or concurrently_stored.block_hash != block["block_hash"]
+        ):
+            raise
+        return {"status": True, "duplicate": True}
     return {"status": True}
 
 
@@ -1239,6 +1257,18 @@ def get_finalized_block(db: Session, height: Any) -> dict[str, Any]:
         for vote in votes
         if vote.phase == "commit"
     ]
+    proposer_id = raw_payload.get("proposer_id") or row.author_email
+    proposer_signature = raw_payload.get("proposer_signature") or row.author_sign
+    validator_signatures = raw_payload.get("validator_signatures")
+    if (
+        not isinstance(validator_signatures, dict)
+        or not isinstance(validator_signatures.get("commit"), dict)
+    ):
+        validator_signatures = {
+            "commit": {
+                vote["validator_id"]: vote["signature"] for vote in commit_signatures
+            }
+        }
     block = {
         "height": row.n_block,
         "round": next(
@@ -1248,11 +1278,14 @@ def get_finalized_block(db: Session, height: Any) -> dict[str, Any]:
         "prev_block_hash": row.prev_block_hash,
         "transactions": raw_payload.get("transactions", []),
         "block_hash": row.block_hash,
+        "proposer_id": proposer_id,
+        "proposer_sign": proposer_signature,
+        "validator_signatures": validator_signatures,
     }
     package = {
         "block_data": block,
-        "proposer_id": row.author_email,
-        "proposer_signature": row.author_sign,
+        "proposer_id": proposer_id,
+        "proposer_signature": proposer_signature,
         "commit_signatures": commit_signatures,
     }
     if not verify_commit_certificate(package):

@@ -973,13 +973,11 @@ defmodule InventoryNode.ConsensusEngine do
       "proposer_signature" => state.temporary_signature,
       "height" => height,
       "block_data" =>
-        state.pending_block
-        |> Map.put("proposer_id", proposer_for(state, height, state.pending_block["round"]))
-        |> Map.put("proposer_sign", state.temporary_signature)
-        |> Map.put(
-          "validator_signatures",
-          %{"commit" => state.commit_votes}
-        )
+        state.pending_block,
+      "commit_signatures" =>
+        Enum.map(state.commit_votes, fn {validator_id, signature} ->
+          %{"validator_id" => validator_id, "signature" => signature}
+        end)
     }
 
     case send_to_python_service(write_payload, state.python_host, state.python_port) do
@@ -989,7 +987,7 @@ defmodule InventoryNode.ConsensusEngine do
         proposer_id = proposer_for(state, height, state.pending_block["round"])
 
         package = %{
-          "block_data" => state.pending_block,
+          "block_data" => write_payload["block_data"],
           "proposer_id" => proposer_id,
           "proposer_signature" => state.temporary_signature,
           "commit_signatures" => write_payload["commit_signatures"]

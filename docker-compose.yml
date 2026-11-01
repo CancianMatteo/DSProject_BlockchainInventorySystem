@@ -26,6 +26,7 @@ services:
     container_name: bis_api_server_a # Nome univoco
     env_file:
       - ./.env
+      - ./Server_Python/.env
     environment:
       - NODE_ID=node_a
       - VALIDATOR_PRIVATE_KEY=${NODE_A_PRIVATE_KEY}
@@ -68,6 +69,7 @@ services:
     container_name: bis_api_server_b # Nome univoco
     env_file:
       - ./.env
+      - ./Server_Python/.env
     environment:
       - NODE_ID=node_b
       - VALIDATOR_PRIVATE_KEY=${NODE_B_PRIVATE_KEY}
@@ -110,6 +112,7 @@ services:
     container_name: bis_api_server_c # Nome univoco
     env_file:
       - ./.env
+      - ./Server_Python/.env
     environment:
       - NODE_ID=node_c
       - VALIDATOR_PRIVATE_KEY=${NODE_C_PRIVATE_KEY}
@@ -152,6 +155,7 @@ services:
     container_name: bis_api_server_d # Nome univoco
     env_file:
       - ./.env
+      - ./Server_Python/.env
     environment:
       - NODE_ID=node_d
       - VALIDATOR_PRIVATE_KEY=${NODE_D_PRIVATE_KEY}

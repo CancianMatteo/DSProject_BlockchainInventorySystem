@@ -112,13 +112,13 @@ ritenta le consegne fallite; duplicati sono innocui perché il mempool usa
 I validatori sono ordinati per ID in modo lessicografico, sia in Elixir sia in Python. Per un'altezza `height` e un round `round`, il proposer atteso è `validators[(height + round) mod numero_validatori]`.
 Con `N = 3f + 1`, il quorum è `2f + 1`.
 
-Python controlla periodicamente la mempool: quando ci sono almeno 500
-transazioni pendenti, oppure ci sono transazioni pendenti e sono trascorsi 15
+Python controlla periodicamente la mempool: quando ci sono almeno 200
+transazioni pendenti, oppure ci sono transazioni pendenti e sono trascorsi 10
 minuti dall'ultimo blocco committato (dall'avvio, se la chain è vuota), invia
 `POST /api/v1/proposal_request` al nodo Elixir locale. Elixir risponde
 `accepted: true` e avvia il normale PRE-PREPARE solo se è il proposer del round
 corrente e non sta già gestendo un blocco. Se non è leader, Python ritenta al
-controllo successivo. Ogni blocco contiene al massimo 500 transazioni.
+controllo successivo. Ogni blocco contiene al massimo 200 transazioni.
 
 Il timeout di round è 8000 ms. Il timeout non cambia da solo il proposer:
 ciascun nodo firma e diffonde `ROUND_CHANGE`, e il round avanza solo quando è
