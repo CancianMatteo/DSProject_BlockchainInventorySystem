@@ -1,4 +1,4 @@
-\documentclass[11pt,a4paper]{memoir}
+\documentclass[11pt, a4paper, oneside]{memoir}
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
@@ -21,7 +21,7 @@
 
 \title{\textbf{Distributed Systems Project: \\ Permissioned Blockchain Inventory System}}
 \author{\textbf{Cancian Matteo} \quad \and \quad \textbf{Del Pio Luogo Marco}}
-\date{Version 1.0 --- \today}
+\date{Version 1.1 --- \today}
 
 \begin{document}
 
@@ -35,8 +35,8 @@ Operating over a network with fair-loss links under a synchronous model, the pla
 \end{abstract}
 
 \clearpage
+
 \tableofcontents
-\clearpage
 
 % ==============================================================================
 % CHAPTER 1: INTRODUCTION
@@ -309,12 +309,10 @@ To manage implementation risk, development is divided into three incremental tie
 \end{description}
 
 
-
 \chapter{Implementation}\label{ch:implementation}
 
 \section{Software Components}
-The Flutter client uses \texttt{go\_router} and Provider for routing and state
-management. It signs transactions locally and calls the Python API. Each
+The Flutter client uses \texttt{go\_router} and Provider for routing and state management. It signs transactions locally and calls the Python API. Each
 Python validator uses FastAPI, SQLAlchemy, and SQLite. The chain, pending
 transactions, forwarding queue, and validator vote records are persisted in
 SQLite; the inventory cache is rebuildable from committed blocks. Each Elixir
@@ -406,37 +404,41 @@ rejected transactions are removed from the cache, preventing a committed
 quantity from being applied twice.
 
 
-
 \chapter{Validation}\label{ch:validation}
 \begin{figure}[htbp]
     \centering
-    \includegraphics[width=0.75\textwidth]{images/blockchain.jpg}
-    \caption{Blockchain network visualization.}
-    \label{fig:blockchain}
+    \begin{minipage}{0.24\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{images/inventory.jpg}
+        \label{fig:inventory}
+    \end{minipage}
+    \hfill
+    \begin{minipage}{0.24\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{images/blockchain.jpg}
+        \label{fig:blockchain}
+    \end{minipage}
+    \hfill
+    \begin{minipage}{0.24\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{images/transactions.jpg}
+        \label{fig:transactions}
+    \end{minipage}
+    \hfill
+    \begin{minipage}{0.24\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{images/block_details.jpg}
+        \label{fig:block_details}
+    \end{minipage}
 \end{figure}
+
 \begin{figure}[htbp]
     \centering
-    \includegraphics[width=0.75\textwidth]{images/transactions.jpg}
-    \caption{Transaction flow in the blockchain system.}
-    \label{fig:transactions}
-\end{figure}
-\begin{figure}[htbp]
-    \centering
-    \includegraphics[width=0.75\textwidth]{images/block_details.jpg}
-    \caption{Block details and structure.}
-    \label{fig:block_details}
-\end{figure}
-\begin{figure}[htbp]
-    \centering
-    \includegraphics[width=0.75\textwidth]{images/profile.jpg}
-    \caption{Operator profile/dashboard.}
-    \label{fig:profile}
-\end{figure}
-\begin{figure}[htbp]
-    \centering
-    \includegraphics[width=0.75\textwidth]{images/inventory.jpg}
-    \caption{Main screen with items and quantities.}
-    \label{fig:inventory}
+    \begin{minipage}{0.2\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{images/profile.jpg}
+        \label{fig:profile}
+    \end{minipage}
 \end{figure}
 
 \section{Automated Validation}
@@ -502,10 +504,11 @@ docker compose exec -T python_validator_a python /app/load_test.py \
     signed transactions. D was the proposer at height 10, round 5. The nodes
     detected a valid conflict proof; the block reached a three-vote COMMIT
     quorum, and the already-committing nodes sent its COMMIT certificate only
-    to reporter C. C imported the block, and all four nodes ended with the
+    to node C. C imported the block, and all four nodes ended with the
     same height and block hash.
     \item \texttt{leader\_offline}: passed as a targeted consensus test with
-    two signed transactions. D reached PREPARE quorum at height 12, round 7,
+    two signed transactions. 
+    D reached PREPARE quorum at height 12, round 7,
     but withheld the COMMIT proposal and its ROUND\_CHANGE message. The honest
     nodes reached a ROUND\_CHANGE quorum. An honest proposer then committed
     the block, which was present with the same hash on all four nodes.
@@ -521,6 +524,15 @@ Byzantine mode was disabled and all four readiness endpoints returned
 three. Safety and availability still depend on the assumed maximum of one
 Byzantine validator and on network connectivity.
 
+\begin{figure}[htbp]
+    \centering
+    \begin{minipage}{0.99\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{images/terminal.png}
+        \caption{testing BLOCK creation succeded with 1 bizantine and failed with 2 bizantine nodes}
+        \label{fig:terminal}
+    \end{minipage}
+\end{figure}
 
 
 \chapter{Conclusions}\label{ch:conclusions}
@@ -547,28 +559,19 @@ accepts proposals from that proposer. If that proposer is the unavailable or
 faulty validator and does not produce a valid proposal, the remaining three
 healthy validators do not currently take over automatically; pending
 transactions can remain uncommitted. The implementation also rejects a
-validator's second vote for a different block at the same height.
+validator's second vote for a different block at the same height during the same round.
 
 
 \section{Future Improvements}
-A future consensus improvement could support repeated voting at one block
-height across multiple rounds, allowing a later proposer to try after an
-earlier proposer is silent or faulty. This must not simply remove the
-one-vote-per-height restriction: validators need a formally specified
-round-change and locking protocol, including signed evidence of prior votes
-and rules requiring later rounds to preserve any block on which a quorum has
-already locked. Without these safeguards, allowing validators to vote again
-could permit conflicting certificates and forks. The protocol should be
-specified and tested under the same four-node, at-most-one-fault assumption
-before this capability is added.
-
-Other future work includes testing proposer timeouts and recovery, validating
-certificate propagation under message loss and reordering, and binding
-operator public keys to authenticated BIS accounts.
+Future work includes testing proposer timeouts and recovery under
+controlled fault injection, validating certificate propagation under message
+loss and reordering, and binding operator public keys to authenticated BIS
+accounts.
 
 Additional improvements include timestamp-age validation, an optional
 nonce/replay cache, persistent pending-cache storage, forwarding metrics and
 alerts, HTTPS, and authenticated inter-site transport.
+
 
 \begin{thebibliography}{9}
     \bibitem{project-repo}
@@ -581,7 +584,5 @@ alerts, HTTPS, and authenticated inter-site transport.
 
 
 \appendix
-
-
 
 \end{document}
